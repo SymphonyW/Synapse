@@ -289,11 +289,7 @@ function App() {
 
   // 表单输入与选择态。
   const [userID, setUserID] = useState('founder')
-  const [prompt, setPrompt] = useState(
-    language === 'zh'
-      ? '请整理一份 Synapse Alpha 测试上线检查清单。'
-      : 'Draft a launch checklist for Synapse alpha testing.',
-  )
+  const [prompt, setPrompt] = useState('')
   const [tasks, setTasks] = useState<Task[]>([])
   const [selectedTaskID, setSelectedTaskID] = useState('')
   const [events, setEvents] = useState<StreamEvent[]>([])

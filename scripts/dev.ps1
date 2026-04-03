@@ -97,8 +97,8 @@ switch ($Task) {
         }
     }
     "up" {
-        # 通过 Docker Compose 启动全部服务。
-        docker compose up --build
+        # 通过 Docker Compose 启动全部服务，后台运行。
+        docker compose up --build -d
     }
     "up-openai" {
         # 使用 OpenAI 配置文件启动全栈。

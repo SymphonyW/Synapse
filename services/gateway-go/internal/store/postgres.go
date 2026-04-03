@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"strings"
 	"time"
 
 	"github.com/lib/pq"
@@ -151,6 +152,57 @@ func (s *PostgresStore) ListTasks(limit int, status string) ([]domain.Task, erro
 
 	if err := rows.Err(); err != nil {
 		return nil, err
+	}
+
+	return tasks, nil
+}
+
+// ListTasksByConversation 按用户和会话返回历史任务，按创建时间升序返回。
+func (s *PostgresStore) ListTasksByConversation(userID string, conversationID string, limit int) ([]domain.Task, error) {
+	trimmedUserID := strings.TrimSpace(userID)
+	trimmedConversationID := strings.TrimSpace(conversationID)
+	if trimmedUserID == "" || trimmedConversationID == "" {
+		return []domain.Task{}, nil
+	}
+
+	if limit <= 0 {
+		limit = 20
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), dbOperationTimeout)
+	defer cancel()
+
+	rows, err := s.db.QueryContext(
+		ctx,
+		`SELECT id, user_id, prompt, status, error, metadata, created_at, updated_at
+		 FROM tasks
+		 WHERE user_id = $1 AND metadata->>'conversation_id' = $2
+		 ORDER BY created_at DESC
+		 LIMIT $3`,
+		trimmedUserID,
+		trimmedConversationID,
+		limit,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	tasks := make([]domain.Task, 0)
+	for rows.Next() {
+		task, err := scanTask(rows)
+		if err != nil {
+			return nil, err
+		}
+		tasks = append(tasks, task)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	for left, right := 0, len(tasks)-1; left < right; left, right = left+1, right-1 {
+		tasks[left], tasks[right] = tasks[right], tasks[left]
 	}
 
 	return tasks, nil
@@ -355,6 +407,193 @@ func (s *PostgresStore) ListDeadLetters(limit int) ([]domain.DeadLetterTask, err
 	return entries, nil
 }
 
+// UpsertSystemUser 创建或更新系统用户（通常用于管理员种子账号）。
+func (s *PostgresStore) UpsertSystemUser(username string, passwordHash string, role domain.UserRole) error {
+	normalized := normalizeAuthUsername(username)
+	if normalized == "" {
+		return errors.New("username is required")
+	}
+	if strings.TrimSpace(passwordHash) == "" {
+		return errors.New("password hash is required")
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), dbOperationTimeout)
+	defer cancel()
+
+	_, err := s.db.ExecContext(
+		ctx,
+		`INSERT INTO auth_users (username, password_hash, role)
+		 VALUES ($1, $2, $3)
+		 ON CONFLICT (username)
+		 DO UPDATE SET password_hash = EXCLUDED.password_hash, role = EXCLUDED.role, updated_at = NOW()`,
+		normalized,
+		passwordHash,
+		string(role),
+	)
+
+	return err
+}
+
+// CreateUser 创建普通用户。
+func (s *PostgresStore) CreateUser(user domain.AuthUser) error {
+	normalized := normalizeAuthUsername(user.Username)
+	if normalized == "" {
+		return errors.New("username is required")
+	}
+	if strings.TrimSpace(user.PasswordHash) == "" {
+		return errors.New("password hash is required")
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), dbOperationTimeout)
+	defer cancel()
+
+	_, err := s.db.ExecContext(
+		ctx,
+		`INSERT INTO auth_users (username, password_hash, role)
+		 VALUES ($1, $2, $3)`,
+		normalized,
+		user.PasswordHash,
+		string(user.Role),
+	)
+	if err != nil {
+		var pqErr *pq.Error
+		if errors.As(err, &pqErr) && pqErr.Code == "23505" {
+			return ErrUserAlreadyExists
+		}
+		return err
+	}
+
+	return nil
+}
+
+// GetUserByUsername 按用户名查询用户。
+func (s *PostgresStore) GetUserByUsername(username string) (domain.AuthUser, bool, error) {
+	normalized := normalizeAuthUsername(username)
+	if normalized == "" {
+		return domain.AuthUser{}, false, nil
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), dbOperationTimeout)
+	defer cancel()
+
+	row := s.db.QueryRowContext(
+		ctx,
+		`SELECT username, password_hash, role, created_at, updated_at
+		 FROM auth_users
+		 WHERE username = $1`,
+		normalized,
+	)
+
+	var user domain.AuthUser
+	var role string
+	err := row.Scan(&user.Username, &user.PasswordHash, &role, &user.CreatedAt, &user.UpdatedAt)
+	if errors.Is(err, sql.ErrNoRows) {
+		return domain.AuthUser{}, false, nil
+	}
+	if err != nil {
+		return domain.AuthUser{}, false, err
+	}
+
+	user.Role = domain.UserRole(role)
+	return user, true, nil
+}
+
+// CreateSession 创建登录会话。
+func (s *PostgresStore) CreateSession(session domain.AuthSession) error {
+	if strings.TrimSpace(session.Token) == "" {
+		return errors.New("session token is required")
+	}
+
+	normalizedUsername := normalizeAuthUsername(session.Username)
+	if normalizedUsername == "" {
+		return errors.New("username is required")
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), dbOperationTimeout)
+	defer cancel()
+
+	_, err := s.db.ExecContext(
+		ctx,
+		`INSERT INTO auth_sessions (token, username, role, expires_at)
+		 VALUES ($1, $2, $3, $4)`,
+		session.Token,
+		normalizedUsername,
+		string(session.Role),
+		session.ExpiresAt,
+	)
+
+	return err
+}
+
+// GetSession 查询有效会话。
+func (s *PostgresStore) GetSession(token string) (domain.AuthSession, bool, error) {
+	normalizedToken := strings.TrimSpace(token)
+	if normalizedToken == "" {
+		return domain.AuthSession{}, false, nil
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), dbOperationTimeout)
+	defer cancel()
+
+	row := s.db.QueryRowContext(
+		ctx,
+		`SELECT token, username, role, expires_at, created_at
+		 FROM auth_sessions
+		 WHERE token = $1 AND expires_at > NOW()`,
+		normalizedToken,
+	)
+
+	var session domain.AuthSession
+	var role string
+	err := row.Scan(&session.Token, &session.Username, &role, &session.ExpiresAt, &session.CreatedAt)
+	if errors.Is(err, sql.ErrNoRows) {
+		return domain.AuthSession{}, false, nil
+	}
+	if err != nil {
+		return domain.AuthSession{}, false, err
+	}
+
+	session.Role = domain.UserRole(role)
+	return session, true, nil
+}
+
+// DeleteSession 删除指定 token 会话。
+func (s *PostgresStore) DeleteSession(token string) error {
+	normalizedToken := strings.TrimSpace(token)
+	if normalizedToken == "" {
+		return nil
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), dbOperationTimeout)
+	defer cancel()
+
+	_, err := s.db.ExecContext(ctx, `DELETE FROM auth_sessions WHERE token = $1`, normalizedToken)
+	return err
+}
+
+// DeleteSessionsByUsername 删除某用户全部会话。
+func (s *PostgresStore) DeleteSessionsByUsername(username string) error {
+	normalizedUsername := normalizeAuthUsername(username)
+	if normalizedUsername == "" {
+		return nil
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), dbOperationTimeout)
+	defer cancel()
+
+	_, err := s.db.ExecContext(ctx, `DELETE FROM auth_sessions WHERE username = $1`, normalizedUsername)
+	return err
+}
+
+// DeleteExpiredSessions 清理过期会话。
+func (s *PostgresStore) DeleteExpiredSessions(now time.Time) error {
+	ctx, cancel := context.WithTimeout(context.Background(), dbOperationTimeout)
+	defer cancel()
+
+	_, err := s.db.ExecContext(ctx, `DELETE FROM auth_sessions WHERE expires_at <= $1`, now)
+	return err
+}
+
 // taskExists 是轻量存在性检查，供 ListEvents 语义判断使用。
 func (s *PostgresStore) taskExists(ctx context.Context, taskID string) (bool, error) {
 	var one int
@@ -403,7 +642,27 @@ func (s *PostgresStore) ensureSchema(ctx context.Context) error {
 		 updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 		);
 
-		CREATE INDEX IF NOT EXISTS idx_task_events_task_id_id ON task_events (task_id, id);`,
+		CREATE TABLE IF NOT EXISTS auth_users (
+		 username TEXT PRIMARY KEY,
+		 password_hash TEXT NOT NULL,
+		 role TEXT NOT NULL,
+		 created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+		 updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+		);
+
+		CREATE TABLE IF NOT EXISTS auth_sessions (
+		 token TEXT PRIMARY KEY,
+		 username TEXT NOT NULL REFERENCES auth_users(username) ON DELETE CASCADE,
+		 role TEXT NOT NULL,
+		 expires_at TIMESTAMPTZ NOT NULL,
+		 created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+		);
+
+		CREATE INDEX IF NOT EXISTS idx_task_events_task_id_id ON task_events (task_id, id);
+		CREATE INDEX IF NOT EXISTS idx_tasks_user_conversation_created
+		 ON tasks (user_id, (metadata->>'conversation_id'), created_at DESC);
+		CREATE INDEX IF NOT EXISTS idx_auth_sessions_username ON auth_sessions (username);
+		CREATE INDEX IF NOT EXISTS idx_auth_sessions_expires_at ON auth_sessions (expires_at);`,
 	)
 	return err
 }

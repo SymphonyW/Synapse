@@ -54,6 +54,7 @@ type batchCancelFailure struct {
 }
 
 var errTaskTerminalState = errors.New("task already in terminal state")
+var errTaskPermissionDenied = errors.New("permission denied")
 
 const (
 	// 死信列表接口限制最大返回数量，避免响应体失控。
@@ -62,7 +63,21 @@ const (
 	// 任务列表默认参数偏向控制台场景（近期任务优先）。
 	defaultTaskListLimit = 50
 	maxTaskListLimit     = 500
+	// 会话上下文仅保留最近若干轮，避免 prompt 无界增长。
+	conversationContextTurnLimit = 8
+	conversationEventLoadLimit   = 8000
+
+	metadataConversationIDKey = "conversation_id"
+	metadataUserMessageKey    = "user_message"
+	metadataClientViewKey     = "client_view"
+	metadataModelPromptKey    = "model_prompt"
+	metadataModelMessagesKey  = "model_messages_json"
 )
+
+type conversationTurn struct {
+	User      string
+	Assistant string
+}
 
 func NewHandler(taskStore store.TaskStore, agentClient agent.Client, taskQueue queue.TaskQueue, taskCanceler TaskCanceler) *Handler {
 	return &Handler{
@@ -96,6 +111,11 @@ func (h *Handler) Healthz(w http.ResponseWriter, r *http.Request) {
 
 // CreateTask 校验请求并落库为 queued，再把任务 ID 入队等待异步执行。
 func (h *Handler) CreateTask(w http.ResponseWriter, r *http.Request) {
+	session, ok := h.requireSession(w, r)
+	if !ok {
+		return
+	}
+
 	var request createTaskRequest
 
 	// 明确拒绝未知字段，避免客户端静默发送错误参数。
@@ -106,8 +126,15 @@ func (h *Handler) CreateTask(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if strings.TrimSpace(request.UserID) == "" || strings.TrimSpace(request.Prompt) == "" {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "user_id and prompt are required"})
+	userID := strings.TrimSpace(session.Username)
+	userMessage := strings.TrimSpace(request.Prompt)
+	if userMessage == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "prompt is required"})
+		return
+	}
+
+	if userID == "" {
+		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
 		return
 	}
 
@@ -115,8 +142,8 @@ func (h *Handler) CreateTask(w http.ResponseWriter, r *http.Request) {
 	now := time.Now().UTC()
 	task := domain.Task{
 		ID:        uuid.NewString(),
-		UserID:    request.UserID,
-		Prompt:    request.Prompt,
+		UserID:    userID,
+		Prompt:    userMessage,
 		Status:    domain.TaskQueued,
 		Metadata:  request.Metadata,
 		CreatedAt: now,
@@ -125,6 +152,38 @@ func (h *Handler) CreateTask(w http.ResponseWriter, r *http.Request) {
 
 	if task.Metadata == nil {
 		task.Metadata = map[string]string{}
+	}
+
+	// model_prompt 由网关负责构建，忽略客户端透传值，避免上下文注入污染。
+	delete(task.Metadata, metadataModelPromptKey)
+	delete(task.Metadata, metadataModelMessagesKey)
+
+	conversationID := strings.TrimSpace(task.Metadata[metadataConversationIDKey])
+	isConversationTask := conversationID != "" || strings.EqualFold(strings.TrimSpace(task.Metadata[metadataClientViewKey]), "chat")
+	if isConversationTask {
+		if conversationID == "" {
+			conversationID = uuid.NewString()
+		}
+
+		task.Metadata[metadataConversationIDKey] = conversationID
+		task.Metadata[metadataUserMessageKey] = userMessage
+
+		historyTurns, err := h.loadConversationTurns(userID, conversationID, conversationContextTurnLimit)
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to build conversation context"})
+			return
+		}
+
+		if len(historyTurns) > 0 {
+			task.Metadata[metadataModelPromptKey] = buildConversationModelPrompt(historyTurns, userMessage)
+		}
+
+		modelMessagesJSON, err := buildConversationModelMessagesJSON(historyTurns, userMessage)
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to encode conversation messages"})
+			return
+		}
+		task.Metadata[metadataModelMessagesKey] = modelMessagesJSON
 	}
 
 	// 先落库后入队，保证 worker 消费前任务已经可查询。
@@ -154,10 +213,20 @@ func (h *Handler) CreateTask(w http.ResponseWriter, r *http.Request) {
 
 // GetTask 按 ID 返回单个任务。
 func (h *Handler) GetTask(w http.ResponseWriter, r *http.Request) {
+	session, ok := h.requireSession(w, r)
+	if !ok {
+		return
+	}
+
 	taskID := r.PathValue("taskID")
 	task, ok := h.store.Get(taskID)
 	if !ok {
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "task not found"})
+		return
+	}
+
+	if !canAccessTask(session, task) {
+		writeJSON(w, http.StatusForbidden, map[string]string{"error": "forbidden"})
 		return
 	}
 
@@ -166,6 +235,11 @@ func (h *Handler) GetTask(w http.ResponseWriter, r *http.Request) {
 
 // ListTasks 返回近期任务，可按状态过滤。
 func (h *Handler) ListTasks(w http.ResponseWriter, r *http.Request) {
+	session, ok := h.requireSession(w, r)
+	if !ok {
+		return
+	}
+
 	limit, err := parseLimit(r.URL.Query().Get("limit"), defaultTaskListLimit, maxTaskListLimit)
 	if err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid limit"})
@@ -179,10 +253,30 @@ func (h *Handler) ListTasks(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	tasks, err := h.store.ListTasks(limit, status)
+	storeLimit := limit
+	if session.Role != domain.UserRoleAdmin {
+		storeLimit = maxTaskListLimit
+	}
+
+	tasks, err := h.store.ListTasks(storeLimit, status)
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to list tasks"})
 		return
+	}
+
+	if session.Role != domain.UserRoleAdmin {
+		filtered := make([]domain.Task, 0, len(tasks))
+		for _, task := range tasks {
+			if canAccessTask(session, task) {
+				filtered = append(filtered, task)
+			}
+		}
+
+		if len(filtered) > limit {
+			filtered = filtered[:limit]
+		}
+
+		tasks = filtered
 	}
 
 	writeJSON(w, http.StatusOK, map[string]any{
@@ -193,10 +287,20 @@ func (h *Handler) ListTasks(w http.ResponseWriter, r *http.Request) {
 
 // ReplayTask 将非 running 任务重置为 queued，并重新入队执行。
 func (h *Handler) ReplayTask(w http.ResponseWriter, r *http.Request) {
+	session, ok := h.requireSession(w, r)
+	if !ok {
+		return
+	}
+
 	taskID := r.PathValue("taskID")
 	task, ok := h.store.Get(taskID)
 	if !ok {
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "task not found"})
+		return
+	}
+
+	if !canAccessTask(session, task) {
+		writeJSON(w, http.StatusForbidden, map[string]string{"error": "forbidden"})
 		return
 	}
 
@@ -235,11 +339,17 @@ func (h *Handler) ReplayTask(w http.ResponseWriter, r *http.Request) {
 
 // BatchCancelTasks 逐个处理取消请求，并返回部分成功结果供调用方重试失败项。
 func (h *Handler) BatchCancelTasks(w http.ResponseWriter, r *http.Request) {
+	session, ok := h.requireSession(w, r)
+	if !ok {
+		return
+	}
+
 	request, err := parseBatchCancelTasksRequest(r)
 	if err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
 		return
 	}
+	request.RequestedBy = session.Username
 
 	if len(request.TaskIDs) == 0 {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "task_ids is required"})
@@ -269,7 +379,7 @@ func (h *Handler) BatchCancelTasks(w http.ResponseWriter, r *http.Request) {
 		task, alreadyCanceled, cancelErr := h.cancelTaskInternal(taskID, cancelTaskRequest{
 			RequestedBy: request.RequestedBy,
 			Reason:      request.Reason,
-		})
+		}, session)
 		if cancelErr != nil {
 			failed = append(failed, batchCancelFailure{TaskID: taskID, Error: cancelErr.Error()})
 			continue
@@ -304,18 +414,26 @@ func (h *Handler) BatchCancelTasks(w http.ResponseWriter, r *http.Request) {
 
 // CancelTask 处理单任务取消：首次取消返回 202，幂等取消返回 200。
 func (h *Handler) CancelTask(w http.ResponseWriter, r *http.Request) {
+	session, ok := h.requireSession(w, r)
+	if !ok {
+		return
+	}
+
 	taskID := r.PathValue("taskID")
 	request, err := parseCancelTaskRequest(r)
 	if err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
 		return
 	}
+	request.RequestedBy = session.Username
 
-	updatedTask, alreadyCanceled, cancelErr := h.cancelTaskInternal(taskID, request)
+	updatedTask, alreadyCanceled, cancelErr := h.cancelTaskInternal(taskID, request, session)
 	if cancelErr != nil {
 		switch {
 		case errors.Is(cancelErr, store.ErrTaskNotFound):
 			writeJSON(w, http.StatusNotFound, map[string]string{"error": "task not found"})
+		case errors.Is(cancelErr, errTaskPermissionDenied):
+			writeJSON(w, http.StatusForbidden, map[string]string{"error": "forbidden"})
 		case errors.Is(cancelErr, errTaskTerminalState):
 			writeJSON(w, http.StatusConflict, map[string]string{"error": "task already in terminal state"})
 		default:
@@ -334,6 +452,11 @@ func (h *Handler) CancelTask(w http.ResponseWriter, r *http.Request) {
 
 // ListDeadLetters 返回已耗尽重试、需要人工介入的任务。
 func (h *Handler) ListDeadLetters(w http.ResponseWriter, r *http.Request) {
+	_, ok := h.requireAdminSession(w, r)
+	if !ok {
+		return
+	}
+
 	limit, err := parseLimit(r.URL.Query().Get("limit"), defaultDeadLetterLimit, maxDeadLetterLimit)
 	if err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid limit"})
@@ -355,9 +478,20 @@ func (h *Handler) ListDeadLetters(w http.ResponseWriter, r *http.Request) {
 // StreamTaskEvents 为单任务提供增量 SSE 事件流。
 // 支持通过 last_event_id 续传；当任务进入终态且无新事件时发送 terminal 并关闭连接。
 func (h *Handler) StreamTaskEvents(w http.ResponseWriter, r *http.Request) {
+	session, ok := h.requireSession(w, r)
+	if !ok {
+		return
+	}
+
 	taskID := r.PathValue("taskID")
-	if _, ok := h.store.Get(taskID); !ok {
+	task, ok := h.store.Get(taskID)
+	if !ok {
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "task not found"})
+		return
+	}
+
+	if !canAccessTask(session, task) {
+		writeJSON(w, http.StatusForbidden, map[string]string{"error": "forbidden"})
 		return
 	}
 
@@ -383,8 +517,9 @@ func (h *Handler) StreamTaskEvents(w http.ResponseWriter, r *http.Request) {
 	}
 	flusher.Flush()
 
-	// 通过轮询持久化事件而非内存状态，实现 SSE 层与 worker 运行态解耦，支持断线重连续传。
-	ticker := time.NewTicker(300 * time.Millisecond)
+	// 通过短周期轮询持久化事件而非内存状态，实现 SSE 层与 worker 运行态解耦，支持断线重连续传。
+	// 轮询间隔适当降低，避免前端看到“成批刷新”的迟滞感。
+	ticker := time.NewTicker(120 * time.Millisecond)
 	defer ticker.Stop()
 
 	for {
@@ -437,6 +572,137 @@ func (h *Handler) StreamTaskEvents(w http.ResponseWriter, r *http.Request) {
 		case <-ticker.C:
 		}
 	}
+}
+
+// loadConversationTurns 从持久化任务与事件中还原最近已完成会话轮次。
+func (h *Handler) loadConversationTurns(userID string, conversationID string, limit int) ([]conversationTurn, error) {
+	tasks, err := h.store.ListTasksByConversation(userID, conversationID, limit)
+	if err != nil {
+		return nil, err
+	}
+
+	turns := make([]conversationTurn, 0, len(tasks))
+	for _, task := range tasks {
+		// 仅使用已成功完成的轮次构建上下文，避免把失败/限流错误文本注入后续请求。
+		if task.Status != domain.TaskCompleted {
+			continue
+		}
+
+		userMessage := strings.TrimSpace(task.Metadata[metadataUserMessageKey])
+		if userMessage == "" {
+			userMessage = strings.TrimSpace(task.Prompt)
+		}
+
+		assistantMessage, err := h.resolveAssistantMessage(task)
+		if err != nil {
+			return nil, err
+		}
+		assistantMessage = strings.TrimSpace(assistantMessage)
+
+		if userMessage == "" || assistantMessage == "" {
+			continue
+		}
+
+		turns = append(turns, conversationTurn{
+			User:      userMessage,
+			Assistant: assistantMessage,
+		})
+	}
+
+	if limit > 0 && len(turns) > limit {
+		turns = turns[len(turns)-limit:]
+	}
+
+	return turns, nil
+}
+
+// resolveAssistantMessage 优先拼接 token 事件；若无 token 则回退到失败/取消原因。
+func (h *Handler) resolveAssistantMessage(task domain.Task) (string, error) {
+	events, err := h.store.ListEvents(task.ID, 0, conversationEventLoadLimit)
+	if err != nil && !errors.Is(err, store.ErrTaskNotFound) {
+		return "", err
+	}
+
+	var tokenBuilder strings.Builder
+	fallbackMessage := ""
+	for _, event := range events {
+		switch event.Type {
+		case "token":
+			tokenBuilder.WriteString(event.Token)
+		case "failed", "canceled":
+			message := strings.TrimSpace(event.Message)
+			if message != "" {
+				fallbackMessage = message
+			}
+		}
+	}
+
+	if tokens := strings.TrimSpace(tokenBuilder.String()); tokens != "" {
+		return tokens, nil
+	}
+
+	if fallbackMessage != "" {
+		return fallbackMessage, nil
+	}
+
+	if task.Status == domain.TaskFailed || task.Status == domain.TaskCanceled {
+		return strings.TrimSpace(task.Error), nil
+	}
+
+	return "", nil
+}
+
+// buildConversationModelPrompt 将历史轮次与当前用户消息组装为模型输入。
+func buildConversationModelPrompt(history []conversationTurn, currentUserMessage string) string {
+	var builder strings.Builder
+	builder.WriteString("You are Synapse assistant. Continue this multi-turn conversation and keep responses practical.\n\n")
+	builder.WriteString("Conversation history:\n")
+
+	for _, turn := range history {
+		builder.WriteString("User: ")
+		builder.WriteString(turn.User)
+		builder.WriteString("\nAssistant: ")
+		builder.WriteString(turn.Assistant)
+		builder.WriteString("\n\n")
+	}
+
+	builder.WriteString("User: ")
+	builder.WriteString(strings.TrimSpace(currentUserMessage))
+	builder.WriteString("\nAssistant:")
+
+	return builder.String()
+}
+
+func buildConversationModelMessagesJSON(history []conversationTurn, currentUserMessage string) (string, error) {
+	type openAIMessage struct {
+		Role    string `json:"role"`
+		Content string `json:"content"`
+	}
+
+	messages := make([]openAIMessage, 0, len(history)*2+2)
+	messages = append(messages, openAIMessage{
+		Role:    "system",
+		Content: "You are Synapse assistant. Continue this multi-turn conversation and keep responses practical.",
+	})
+
+	for _, turn := range history {
+		messages = append(messages,
+			openAIMessage{Role: "user", Content: turn.User},
+			openAIMessage{Role: "assistant", Content: turn.Assistant},
+		)
+	}
+
+	messages = append(messages, openAIMessage{
+		Role:    "user",
+		Content: strings.TrimSpace(currentUserMessage),
+	})
+
+	encoded, err := json.Marshal(messages)
+	if err != nil {
+		return "", err
+	}
+
+	return string(encoded), nil
 }
 
 // parseLastEventID 解析并校验 SSE 续传游标。
@@ -523,10 +789,14 @@ func parseBatchCancelTasksRequest(r *http.Request) (batchCancelTasksRequest, err
 }
 
 // cancelTaskInternal 统一封装单取消与批量取消共享的业务规则。
-func (h *Handler) cancelTaskInternal(taskID string, request cancelTaskRequest) (domain.Task, bool, error) {
+func (h *Handler) cancelTaskInternal(taskID string, request cancelTaskRequest, session domain.AuthSession) (domain.Task, bool, error) {
 	task, ok := h.store.Get(taskID)
 	if !ok {
 		return domain.Task{}, false, store.ErrTaskNotFound
+	}
+
+	if !canAccessTask(session, task) {
+		return domain.Task{}, false, errTaskPermissionDenied
 	}
 
 	if task.Status == domain.TaskCanceled {
@@ -574,6 +844,32 @@ func (h *Handler) cancelTaskInternal(taskID string, request cancelTaskRequest) (
 	}
 
 	return updatedTask, false, nil
+}
+
+func (h *Handler) requireSession(w http.ResponseWriter, r *http.Request) (domain.AuthSession, bool) {
+	return h.readSessionFromRequest(w, r)
+}
+
+func (h *Handler) requireAdminSession(w http.ResponseWriter, r *http.Request) (domain.AuthSession, bool) {
+	session, ok := h.readSessionFromRequest(w, r)
+	if !ok {
+		return domain.AuthSession{}, false
+	}
+
+	if session.Role != domain.UserRoleAdmin {
+		writeJSON(w, http.StatusForbidden, map[string]string{"error": "forbidden"})
+		return domain.AuthSession{}, false
+	}
+
+	return session, true
+}
+
+func canAccessTask(session domain.AuthSession, task domain.Task) bool {
+	if session.Role == domain.UserRoleAdmin {
+		return true
+	}
+
+	return strings.EqualFold(strings.TrimSpace(session.Username), strings.TrimSpace(task.UserID))
 }
 
 // isAllowedTaskStatus 集中维护状态过滤参数的合法值。

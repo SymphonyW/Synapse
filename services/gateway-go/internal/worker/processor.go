@@ -21,6 +21,8 @@ import (
 // ErrTaskCanceled 是内部哨兵错误，用于在“主动取消”场景下短路重试逻辑。
 var ErrTaskCanceled = errors.New("task canceled")
 
+const metadataModelPromptKey = "model_prompt"
+
 // ProcessorOptions 控制任务执行循环的运行时行为。
 type ProcessorOptions struct {
 	ExecutionTimeout time.Duration
@@ -164,7 +166,12 @@ func (p *TaskProcessor) processTask(parentCtx context.Context, taskID string) er
 		cancel()
 	}()
 
-	stream, err := p.agent.SubmitTask(execCtx, task)
+	submissionTask := task
+	if modelPrompt := strings.TrimSpace(task.Metadata[metadataModelPromptKey]); modelPrompt != "" {
+		submissionTask.Prompt = modelPrompt
+	}
+
+	stream, err := p.agent.SubmitTask(execCtx, submissionTask)
 	if err != nil {
 		if p.isCanceled(taskID) || isCanceledError(err) {
 			return ErrTaskCanceled

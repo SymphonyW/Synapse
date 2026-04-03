@@ -41,16 +41,24 @@ npm run build
 
 - `synapse.web.language`
 - `synapse.web.view-mode`
+- `synapse.web.auth.session`（仅缓存当前会话身份摘要，不存储密码）
+
+认证与权限：
+
+- 登录与注册由网关接口提供（Cookie 会话）。
+- `user` 角色只能访问自己的任务与事件流。
+- `admin` 角色可访问运维台与死信面板。
 
 ### 3.1 用户端（client）
 
-- 提交任务（`POST /v1/tasks`）。
-- 展示当前 `user_id` 的任务列表（由全量任务列表前端过滤）。
+- 登录后按会话维度发起与查看任务（`POST /v1/tasks`）。
+- 展示当前用户可见任务（普通用户仅本人，管理员可切换 `user_id`）。
 - 查看选中任务事件流（SSE）。
 - 中英文切换。
 
 ### 3.2 运维端（ops）
 
+- 仅管理员可进入。
 - 创建任务。
 - 最近任务列表与状态过滤。
 - 单任务取消。
@@ -93,6 +101,10 @@ SSE 行为：
 ## 5. 调用的后端接口
 
 - `GET /healthz`
+- `POST /v1/auth/register`
+- `POST /v1/auth/login`
+- `POST /v1/auth/logout`
+- `GET /v1/auth/me`
 - `POST /v1/tasks`
 - `GET /v1/tasks`
 - `GET /v1/tasks/{taskID}`
@@ -113,5 +125,5 @@ SSE 行为：
 
 ## 7. 已知限制
 
-- 当前没有登录态和权限体系，`user_id` 只是请求字段。
-- 用户端我的任务基于前端筛选，不是后端独立接口。
+- 会话采用单机 Cookie + 存储层会话表，暂未接入跨域场景下的 CSRF 防护策略。
+- 普通用户任务列表当前由网关在通用列表结果上做权限过滤，尚未拆分为独立的按用户分页查询接口。

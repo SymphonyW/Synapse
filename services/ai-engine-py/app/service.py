@@ -34,7 +34,7 @@ class AgentRuntimeService(agent_pb2_grpc.AgentRuntimeServicer):
 
         try:
             # 阶段 2：按 provider 输出逐 token 下发。
-            async for token in self._runtime.run_prompt(request.prompt):
+            async for token in self._runtime.run_prompt(request.prompt, dict(request.metadata)):
                 yield agent_pb2.AgentEvent(
                     type=agent_pb2.AGENT_EVENT_TYPE_TOKEN,
                     token=token,

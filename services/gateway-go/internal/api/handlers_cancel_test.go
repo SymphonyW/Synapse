@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -52,6 +53,7 @@ func TestCancelTaskAcceptedWithAudit(t *testing.T) {
 	body := []byte(`{"requested_by":"ops-console","reason":"maintenance window"}`)
 	request := httptest.NewRequest(http.MethodPost, "/v1/tasks/task-accepted/cancel", bytes.NewReader(body))
 	request.Header.Set("Content-Type", "application/json")
+	attachSessionCookie(t, taskStore, request, "ops-console", domain.UserRoleAdmin)
 	response := httptest.NewRecorder()
 
 	router.ServeHTTP(response, request)
@@ -104,6 +106,7 @@ func TestCancelTaskAlreadyCanceledReturnsOK(t *testing.T) {
 	router := NewRouter(NewHandler(taskStore, noopAgentClient{}, queue.NewInMemoryQueue(8), canceler))
 
 	request := httptest.NewRequest(http.MethodPost, "/v1/tasks/task-already-canceled/cancel", nil)
+	attachSessionCookie(t, taskStore, request, "ops-console", domain.UserRoleAdmin)
 	response := httptest.NewRecorder()
 
 	router.ServeHTTP(response, request)
@@ -137,6 +140,7 @@ func TestCancelTaskTerminalConflict(t *testing.T) {
 	router := NewRouter(NewHandler(taskStore, noopAgentClient{}, queue.NewInMemoryQueue(8), &recordingTaskCanceler{}))
 
 	request := httptest.NewRequest(http.MethodPost, "/v1/tasks/task-completed/cancel", nil)
+	attachSessionCookie(t, taskStore, request, "ops-console", domain.UserRoleAdmin)
 	response := httptest.NewRecorder()
 
 	router.ServeHTTP(response, request)
@@ -168,6 +172,7 @@ func TestBatchCancelTasksPartialFailures(t *testing.T) {
 	}`)
 	request := httptest.NewRequest(http.MethodPost, "/v1/tasks/cancel", body)
 	request.Header.Set("Content-Type", "application/json")
+	attachSessionCookie(t, taskStore, request, "ops-console", domain.UserRoleAdmin)
 	response := httptest.NewRecorder()
 
 	router.ServeHTTP(response, request)
@@ -230,6 +235,83 @@ func TestBatchCancelTasksPartialFailures(t *testing.T) {
 	}
 }
 
+// 验证普通用户不能取消其他用户任务。
+func TestCancelTaskForbiddenForAnotherUser(t *testing.T) {
+	taskStore := store.NewInMemory()
+	seedTask(t, taskStore, "task-foreign", domain.TaskQueued, "")
+
+	router := NewRouter(NewHandler(taskStore, noopAgentClient{}, queue.NewInMemoryQueue(8), &recordingTaskCanceler{}))
+
+	request := httptest.NewRequest(http.MethodPost, "/v1/tasks/task-foreign/cancel", nil)
+	attachSessionCookie(t, taskStore, request, "regular-user", domain.UserRoleUser)
+	response := httptest.NewRecorder()
+
+	router.ServeHTTP(response, request)
+
+	if response.Code != http.StatusForbidden {
+		t.Fatalf("unexpected status: got %d want %d", response.Code, http.StatusForbidden)
+	}
+
+	var payload map[string]string
+	decodeJSON(t, response, &payload)
+	if payload["error"] != "forbidden" {
+		t.Fatalf("unexpected error response: %#v", payload)
+	}
+
+	storedTask, ok := taskStore.Get("task-foreign")
+	if !ok {
+		t.Fatal("task-foreign not found in store")
+	}
+	if storedTask.Status != domain.TaskQueued {
+		t.Fatalf("task status should remain queued, got %q", storedTask.Status)
+	}
+}
+
+// 验证未登录请求会被拒绝。
+func TestCancelTaskRequiresAuthentication(t *testing.T) {
+	taskStore := store.NewInMemory()
+	seedTask(t, taskStore, "task-auth-required", domain.TaskQueued, "")
+
+	router := NewRouter(NewHandler(taskStore, noopAgentClient{}, queue.NewInMemoryQueue(8), &recordingTaskCanceler{}))
+
+	request := httptest.NewRequest(http.MethodPost, "/v1/tasks/task-auth-required/cancel", nil)
+	response := httptest.NewRecorder()
+
+	router.ServeHTTP(response, request)
+
+	if response.Code != http.StatusUnauthorized {
+		t.Fatalf("unexpected status: got %d want %d", response.Code, http.StatusUnauthorized)
+	}
+
+	var payload map[string]string
+	decodeJSON(t, response, &payload)
+	if payload["error"] != "unauthorized" {
+		t.Fatalf("unexpected error response: %#v", payload)
+	}
+}
+
+// 验证死信接口仅管理员可访问。
+func TestListDeadLettersForbiddenForRegularUser(t *testing.T) {
+	taskStore := store.NewInMemory()
+	router := NewRouter(NewHandler(taskStore, noopAgentClient{}, queue.NewInMemoryQueue(8), &recordingTaskCanceler{}))
+
+	request := httptest.NewRequest(http.MethodGet, "/v1/dead-letters", nil)
+	attachSessionCookie(t, taskStore, request, "regular-user", domain.UserRoleUser)
+	response := httptest.NewRecorder()
+
+	router.ServeHTTP(response, request)
+
+	if response.Code != http.StatusForbidden {
+		t.Fatalf("unexpected status: got %d want %d", response.Code, http.StatusForbidden)
+	}
+
+	var payload map[string]string
+	decodeJSON(t, response, &payload)
+	if payload["error"] != "forbidden" {
+		t.Fatalf("unexpected error response: %#v", payload)
+	}
+}
+
 // 构造指定状态的任务测试数据。
 func seedTask(t *testing.T, taskStore *store.InMemoryStore, taskID string, status domain.TaskStatus, errMessage string) {
 	t.Helper()
@@ -261,4 +343,32 @@ func decodeJSON(t *testing.T, response *httptest.ResponseRecorder, target any) {
 	if err := json.NewDecoder(response.Body).Decode(target); err != nil {
 		t.Fatalf("failed to decode JSON response: %v", err)
 	}
+}
+
+func attachSessionCookie(
+	t *testing.T,
+	taskStore *store.InMemoryStore,
+	request *http.Request,
+	username string,
+	role domain.UserRole,
+) {
+	t.Helper()
+
+	now := time.Now().UTC()
+	token := fmt.Sprintf("token-%s-%d", username, now.UnixNano())
+	if err := taskStore.CreateSession(domain.AuthSession{
+		Token:     token,
+		Username:  username,
+		Role:      role,
+		CreatedAt: now,
+		ExpiresAt: now.Add(30 * time.Minute),
+	}); err != nil {
+		t.Fatalf("CreateSession returned error: %v", err)
+	}
+
+	request.AddCookie(&http.Cookie{
+		Name:  authSessionCookieName,
+		Value: token,
+		Path:  "/",
+	})
 }

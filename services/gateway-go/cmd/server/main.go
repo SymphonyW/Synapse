@@ -6,15 +6,18 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
 	"github.com/synapse/synapse/services/gateway-go/internal/agent"
 	"github.com/synapse/synapse/services/gateway-go/internal/api"
 	"github.com/synapse/synapse/services/gateway-go/internal/config"
+	"github.com/synapse/synapse/services/gateway-go/internal/domain"
 	"github.com/synapse/synapse/services/gateway-go/internal/queue"
 	"github.com/synapse/synapse/services/gateway-go/internal/store"
 	"github.com/synapse/synapse/services/gateway-go/internal/worker"
+	"golang.org/x/crypto/bcrypt"
 )
 
 // main 负责组装网关依赖，并启动 HTTP 服务与后台任务处理器。
@@ -50,6 +53,19 @@ func main() {
 			log.Printf("task store backend=postgres")
 		}
 	}
+
+	adminUsername := strings.ToLower(strings.TrimSpace(cfg.AuthAdminUsername))
+	if adminUsername == "" {
+		adminUsername = "admin"
+	}
+	adminPasswordHash, err := bcrypt.GenerateFromPassword([]byte(cfg.AuthAdminPassword), bcrypt.DefaultCost)
+	if err != nil {
+		log.Fatalf("failed to hash admin password: %v", err)
+	}
+	if err := taskStore.UpsertSystemUser(adminUsername, string(adminPasswordHash), domain.UserRoleAdmin); err != nil {
+		log.Fatalf("failed to upsert admin account: %v", err)
+	}
+	log.Printf("auth admin user is ready")
 
 	// 队列同样采用“内存默认、Redis 优先”的可用性策略。
 	taskQueue := queue.TaskQueue(queue.NewInMemoryQueue(1024))

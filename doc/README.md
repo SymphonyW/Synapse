@@ -1,45 +1,37 @@
-# Synapse 文档索引
+# Synapse 技术文档总览
 
-本目录只记录当前代码已经实现的能力，不描述未落地的规划。
+本目录用于沉淀 Synapse 项目的模块级与功能级技术文档，文档组织遵循“一个模块或一个功能一份文档”的原则。
 
-## 文档地图
+## 文档导航
 
-| 文档 | 聚焦内容 | 适用角色 |
-| --- | --- | --- |
-| [project-beginner-guide.md](./project-beginner-guide.md) | 新手完整入门：技术栈、文件职责、端到端流程、排错路径 | 新同学、全角色 |
-| [architecture.md](./architecture.md) | 组件边界、任务生命周期、重试/取消/死信机制 | 后端、架构、测试 |
-| [api.md](./api.md) | HTTP、SSE、gRPC 契约与错误语义 | 前后端、联调、测试 |
-| [configuration.md](./configuration.md) | 环境变量、默认值、Compose 变量矩阵 | 后端、运维 |
-| [deployment.md](./deployment.md) | 本地开发、Compose 启动、验收与排障 | 开发、测试、运维 |
+1. [总体架构](01-总体架构.md)
+2. [部署与启动](02-部署与启动.md)
+3. [协议与通信](03-协议与通信.md)
+4. [Gateway 总览](10-gateway-总览.md)
+5. [Gateway Config 模块](11-gateway-config模块.md)
+6. [Gateway API 模块](12-gateway-api模块.md)
+7. [Gateway Domain 模块](13-gateway-domain模块.md)
+8. [Gateway Queue 模块](14-gateway-queue模块.md)
+9. [Gateway Store 模块](15-gateway-store模块.md)
+10. [Gateway Worker 模块](16-gateway-worker模块.md)
+11. [AI Engine 模块](20-ai-engine模块.md)
+12. [Web 模块](30-web模块.md)
+13. [功能：认证与权限](40-功能-认证与权限.md)
+14. [功能：任务生命周期与事件流](41-功能-任务生命周期与事件流.md)
+15. [功能：会话上下文构建](42-功能-会话上下文.md)
+16. [功能：重试、死信与重放](43-功能-重试死信与重放.md)
+17. [运维排障手册](50-运维排障手册.md)
 
-补充入口：
+## 阅读建议
 
-- 根文档：[../README.md](../README.md)
-- 前端控制台文档：[../apps/web/README.md](../apps/web/README.md)
+1. 首次接触项目：按 1 -> 2 -> 3 -> 4 顺序阅读。
+2. 深入后端实现：阅读 5~10。
+3. 深入前端实现：阅读 12。
+4. 定位业务行为：阅读 13~16。
+5. 排障与值班：阅读 17。
 
-## 推荐阅读顺序
+## 维护原则
 
-1. 新接手项目：先看 [architecture.md](./architecture.md)，再看 [api.md](./api.md)。
-2. 零基础入门：先看 [project-beginner-guide.md](./project-beginner-guide.md)，再看 [architecture.md](./architecture.md)。
-3. 联调接口：直接看 [api.md](./api.md) 和 [../apps/web/README.md](../apps/web/README.md)。
-4. 部署排障：先看 [deployment.md](./deployment.md)，再查 [configuration.md](./configuration.md)。
-
-## 全局约定
-
-- 任务状态：`queued`、`running`、`completed`、`failed`、`canceled`。
-- 时间字段：
-  - `created_at`、`updated_at` 使用 RFC3339。
-  - `emitted_at_unix_ms` 使用 Unix 毫秒时间戳。
-- 所有错误返回统一为：
-
-```json
-{
-  "error": "..."
-}
-```
-
-## 文档维护原则
-
-- 以源码行为为准，避免“文档领先代码”。
-- 接口字段、默认值、状态码变更必须同步更新文档。
-- 示例命令优先保证可直接运行，避免伪命令。
+1. 任何模块新增重要逻辑时，应同步更新对应文档。
+2. 环境变量、接口、状态机变更后，必须更新相关章节。
+3. 重大设计决策建议增加“变更记录”小节，保留上下文。

@@ -31,6 +31,10 @@ func NewRouter(handler *Handler) http.Handler {
 	mux := http.NewServeMux()
 	// 健康检查与任务相关 API。
 	mux.HandleFunc("GET /healthz", handler.Healthz)
+	mux.HandleFunc("POST /v1/auth/register", handler.RegisterUser)
+	mux.HandleFunc("POST /v1/auth/login", handler.LoginUser)
+	mux.HandleFunc("POST /v1/auth/logout", handler.LogoutUser)
+	mux.HandleFunc("GET /v1/auth/me", handler.GetCurrentUser)
 	mux.HandleFunc("GET /v1/tasks", handler.ListTasks)
 	mux.HandleFunc("POST /v1/tasks", handler.CreateTask)
 	mux.HandleFunc("POST /v1/tasks/cancel", handler.BatchCancelTasks)

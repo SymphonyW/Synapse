@@ -3,6 +3,7 @@ package store
 import (
 	"errors"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -18,6 +19,8 @@ type InMemoryStore struct {
 	tasks       map[string]domain.Task
 	events      map[string][]domain.TaskEvent
 	deadLetters map[string]domain.DeadLetterTask
+	users       map[string]domain.AuthUser
+	sessions    map[string]domain.AuthSession
 	nextEventID int64
 }
 
@@ -27,6 +30,8 @@ func NewInMemory() *InMemoryStore {
 		tasks:       map[string]domain.Task{},
 		events:      map[string][]domain.TaskEvent{},
 		deadLetters: map[string]domain.DeadLetterTask{},
+		users:       map[string]domain.AuthUser{},
+		sessions:    map[string]domain.AuthSession{},
 	}
 }
 
@@ -81,6 +86,46 @@ func (s *InMemoryStore) ListTasks(limit int, status string) ([]domain.Task, erro
 
 	if limit > 0 && len(tasks) > limit {
 		tasks = tasks[:limit]
+	}
+
+	return tasks, nil
+}
+
+// ListTasksByConversation 按用户和会话读取历史任务，按创建时间升序返回。
+func (s *InMemoryStore) ListTasksByConversation(userID string, conversationID string, limit int) ([]domain.Task, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	trimmedUserID := strings.TrimSpace(userID)
+	trimmedConversationID := strings.TrimSpace(conversationID)
+	if trimmedUserID == "" || trimmedConversationID == "" {
+		return []domain.Task{}, nil
+	}
+
+	tasks := make([]domain.Task, 0)
+	for _, task := range s.tasks {
+		if task.UserID != trimmedUserID {
+			continue
+		}
+
+		if strings.TrimSpace(task.Metadata["conversation_id"]) != trimmedConversationID {
+			continue
+		}
+
+		tasks = append(tasks, cloneTask(task))
+	}
+
+	sort.Slice(tasks, func(i, j int) bool {
+		left := tasks[i]
+		right := tasks[j]
+		if left.CreatedAt.Equal(right.CreatedAt) {
+			return left.UpdatedAt.Before(right.UpdatedAt)
+		}
+		return left.CreatedAt.Before(right.CreatedAt)
+	})
+
+	if limit > 0 && len(tasks) > limit {
+		tasks = tasks[len(tasks)-limit:]
 	}
 
 	return tasks, nil
@@ -208,6 +253,182 @@ func (s *InMemoryStore) ListDeadLetters(limit int) ([]domain.DeadLetterTask, err
 	}
 
 	return entries, nil
+}
+
+// UpsertSystemUser 创建或更新系统账号（通常用于管理员种子用户）。
+func (s *InMemoryStore) UpsertSystemUser(username string, passwordHash string, role domain.UserRole) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	normalized := normalizeAuthUsername(username)
+	if normalized == "" {
+		return errors.New("username is required")
+	}
+	if passwordHash == "" {
+		return errors.New("password hash is required")
+	}
+
+	now := time.Now().UTC()
+	entry, exists := s.users[normalized]
+	if !exists {
+		entry = domain.AuthUser{
+			Username:  normalized,
+			CreatedAt: now,
+		}
+	}
+
+	entry.Username = normalized
+	entry.PasswordHash = passwordHash
+	entry.Role = role
+	entry.UpdatedAt = now
+	if entry.CreatedAt.IsZero() {
+		entry.CreatedAt = now
+	}
+
+	s.users[normalized] = entry
+	return nil
+}
+
+// CreateUser 创建普通用户。
+func (s *InMemoryStore) CreateUser(user domain.AuthUser) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	normalized := normalizeAuthUsername(user.Username)
+	if normalized == "" {
+		return errors.New("username is required")
+	}
+	if user.PasswordHash == "" {
+		return errors.New("password hash is required")
+	}
+
+	if _, exists := s.users[normalized]; exists {
+		return ErrUserAlreadyExists
+	}
+
+	now := time.Now().UTC()
+	entry := domain.AuthUser{
+		Username:     normalized,
+		PasswordHash: user.PasswordHash,
+		Role:         user.Role,
+		CreatedAt:    now,
+		UpdatedAt:    now,
+	}
+
+	s.users[normalized] = entry
+	return nil
+}
+
+// GetUserByUsername 按用户名读取用户。
+func (s *InMemoryStore) GetUserByUsername(username string) (domain.AuthUser, bool, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	normalized := normalizeAuthUsername(username)
+	if normalized == "" {
+		return domain.AuthUser{}, false, nil
+	}
+
+	user, exists := s.users[normalized]
+	if !exists {
+		return domain.AuthUser{}, false, nil
+	}
+
+	return user, true, nil
+}
+
+// CreateSession 创建登录会话。
+func (s *InMemoryStore) CreateSession(session domain.AuthSession) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if strings.TrimSpace(session.Token) == "" {
+		return errors.New("session token is required")
+	}
+
+	normalized := normalizeAuthUsername(session.Username)
+	if normalized == "" {
+		return errors.New("username is required")
+	}
+
+	now := time.Now().UTC()
+	entry := session
+	entry.Username = normalized
+	if entry.CreatedAt.IsZero() {
+		entry.CreatedAt = now
+	}
+
+	s.sessions[entry.Token] = entry
+	return nil
+}
+
+// GetSession 查询会话，并在读取时剔除过期会话。
+func (s *InMemoryStore) GetSession(token string) (domain.AuthSession, bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	normalizedToken := strings.TrimSpace(token)
+	if normalizedToken == "" {
+		return domain.AuthSession{}, false, nil
+	}
+
+	session, exists := s.sessions[normalizedToken]
+	if !exists {
+		return domain.AuthSession{}, false, nil
+	}
+
+	if !session.ExpiresAt.IsZero() && !session.ExpiresAt.After(time.Now().UTC()) {
+		delete(s.sessions, normalizedToken)
+		return domain.AuthSession{}, false, nil
+	}
+
+	return session, true, nil
+}
+
+// DeleteSession 删除指定 token 会话。
+func (s *InMemoryStore) DeleteSession(token string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	delete(s.sessions, strings.TrimSpace(token))
+	return nil
+}
+
+// DeleteSessionsByUsername 删除某用户全部会话。
+func (s *InMemoryStore) DeleteSessionsByUsername(username string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	normalized := normalizeAuthUsername(username)
+	if normalized == "" {
+		return nil
+	}
+
+	for token, session := range s.sessions {
+		if normalizeAuthUsername(session.Username) == normalized {
+			delete(s.sessions, token)
+		}
+	}
+
+	return nil
+}
+
+// DeleteExpiredSessions 清理过期会话。
+func (s *InMemoryStore) DeleteExpiredSessions(now time.Time) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	for token, session := range s.sessions {
+		if !session.ExpiresAt.IsZero() && !session.ExpiresAt.After(now) {
+			delete(s.sessions, token)
+		}
+	}
+
+	return nil
+}
+
+func normalizeAuthUsername(value string) string {
+	return strings.ToLower(strings.TrimSpace(value))
 }
 
 // cloneTask 深拷贝任务，防止 metadata map 共享。

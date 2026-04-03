@@ -12,6 +12,8 @@ type Config struct {
 	AIEngineAddr           string
 	DatabaseURL            string
 	DatabaseConnectTimeout time.Duration
+	AuthAdminUsername      string
+	AuthAdminPassword      string
 	RedisAddr              string
 	RedisPassword          string
 	RedisDB                int
@@ -30,6 +32,8 @@ func Load() Config {
 		AIEngineAddr:           getenv("SYNAPSE_AI_ENGINE_ADDR", "127.0.0.1:50051"),
 		DatabaseURL:            os.Getenv("SYNAPSE_DATABASE_URL"),
 		DatabaseConnectTimeout: getDurationEnv("SYNAPSE_DB_CONNECT_TIMEOUT", 5*time.Second),
+		AuthAdminUsername:      getenv("SYNAPSE_AUTH_ADMIN_USERNAME", "admin"),
+		AuthAdminPassword:      getenv("SYNAPSE_AUTH_ADMIN_PASSWORD", "123456"),
 		RedisAddr:              os.Getenv("SYNAPSE_REDIS_ADDR"),
 		RedisPassword:          os.Getenv("SYNAPSE_REDIS_PASSWORD"),
 		RedisDB:                getIntEnv("SYNAPSE_REDIS_DB", 0),

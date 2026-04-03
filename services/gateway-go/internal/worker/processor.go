@@ -2,10 +2,12 @@ package worker
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"log"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -22,6 +24,9 @@ import (
 var ErrTaskCanceled = errors.New("task canceled")
 
 const metadataModelPromptKey = "model_prompt"
+const metadataApprovalGrantedKey = "approval_granted"
+const metadataAgentResumeStepKey = "agent_resume_step_index"
+const metadataAgentRequiredToolKey = "agent_required_tool"
 
 // ProcessorOptions 控制任务执行循环的运行时行为。
 type ProcessorOptions struct {
@@ -213,17 +218,112 @@ func (p *TaskProcessor) processTask(parentCtx context.Context, taskID string) er
 			EmittedAtUnixMS: event.EmittedAtUnixMs,
 		})
 		if persistErr != nil {
+			if errors.Is(persistErr, store.ErrTaskNotFound) {
+				// 会话删除可能与流式回写并发发生，任务已不存在时无需重试。
+				return nil
+			}
 			return persistErr
 		}
 
 		// 某些事件类型会驱动任务状态迁移。
+		if persistedEvent.Type == "info" {
+			pauseMessage, metadataUpdates, shouldPause := parseApprovalRequiredInfo(persistedEvent.Message)
+			if shouldPause {
+				if _, _, updateErr := p.taskStore.UpdateMetadata(taskID, metadataUpdates); updateErr != nil {
+					return updateErr
+				}
+
+				if pauseMessage == "" {
+					pauseMessage = "task paused: waiting for approval"
+				}
+
+				currentTask, exists := p.taskStore.Get(taskID)
+				if !exists {
+					return nil
+				}
+				if currentTask.Status != domain.TaskPaused {
+					p.taskStore.UpdateStatus(taskID, domain.TaskPaused, pauseMessage)
+					_, _ = p.taskStore.AppendEvent(taskID, domain.TaskEvent{
+						Type:            "paused",
+						Message:         pauseMessage,
+						EmittedAtUnixMS: time.Now().UTC().UnixMilli(),
+					})
+				}
+			}
+		}
+
 		switch persistedEvent.Type {
 		case "completed":
 			p.taskStore.UpdateStatus(taskID, domain.TaskCompleted, "")
+			_, _, _ = p.taskStore.UpdateMetadata(taskID, map[string]string{
+				metadataAgentResumeStepKey:   "",
+				metadataAgentRequiredToolKey: "",
+			})
 		case "failed":
 			p.taskStore.UpdateStatus(taskID, domain.TaskFailed, persistedEvent.Message)
 		}
 	}
+}
+
+type agentInfoEnvelope struct {
+	AgentEvent string         `json:"agent_event"`
+	Payload    map[string]any `json:"payload"`
+}
+
+// parseApprovalRequiredInfo 提取审批暂停信息并返回 metadata 更新补丁。
+func parseApprovalRequiredInfo(message string) (string, map[string]string, bool) {
+	trimmed := strings.TrimSpace(message)
+	if trimmed == "" {
+		return "", nil, false
+	}
+
+	var payload agentInfoEnvelope
+	if err := json.Unmarshal([]byte(trimmed), &payload); err != nil {
+		return "", nil, false
+	}
+
+	if strings.TrimSpace(payload.AgentEvent) != "approval_required" {
+		return "", nil, false
+	}
+
+	tool := ""
+	stepIndex := 0
+	if payload.Payload != nil {
+		if rawTool, ok := payload.Payload["tool"]; ok {
+			if toolValue, castOK := rawTool.(string); castOK {
+				tool = strings.TrimSpace(toolValue)
+			}
+		}
+
+		if rawStep, ok := payload.Payload["resume_step_index"]; ok {
+			switch value := rawStep.(type) {
+			case float64:
+				stepIndex = int(value)
+			case string:
+				parsed, parseErr := strconv.Atoi(strings.TrimSpace(value))
+				if parseErr == nil {
+					stepIndex = parsed
+				}
+			}
+		}
+	}
+
+	updates := map[string]string{
+		metadataApprovalGrantedKey: "false",
+	}
+	if stepIndex > 0 {
+		updates[metadataAgentResumeStepKey] = strconv.Itoa(stepIndex)
+	}
+	if tool != "" {
+		updates[metadataAgentRequiredToolKey] = tool
+	}
+
+	pauseMessage := "task paused: waiting for approval"
+	if tool != "" {
+		pauseMessage = fmt.Sprintf("task paused: approval required for tool %s", tool)
+	}
+
+	return pauseMessage, updates, true
 }
 
 // registerActive 记录当前活跃任务，供取消接口定位。

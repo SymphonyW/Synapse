@@ -26,9 +26,10 @@ TaskStatus：
 
 1. queued
 2. running
-3. completed
-4. failed
-5. canceled
+3. paused
+4. completed
+5. failed
+6. canceled
 
 TaskEvent：
 

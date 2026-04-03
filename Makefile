@@ -2,7 +2,7 @@ PROTO_FILE=proto/synapse/v1/agent.proto
 GO_OUT=services/gateway-go/internal/gen
 PY_OUT=services/ai-engine-py
 
-.PHONY: proto proto-go proto-py gateway ai web up down
+.PHONY: proto proto-go proto-py gateway ai web agent-regression up down
 
 proto: proto-go proto-py
 
@@ -21,6 +21,9 @@ ai:
 
 web:
 	cd apps/web && npm run dev
+
+agent-regression:
+	cd services/ai-engine-py && python -m app.benchmarks.regression
 
 up:
 	docker compose up --build

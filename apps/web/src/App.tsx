@@ -6,7 +6,7 @@ import remarkGfm from 'remark-gfm'
 import './App.css'
 
 // 控制台展示与筛选使用的任务生命周期状态。
-type TaskStatus = 'queued' | 'running' | 'completed' | 'failed' | 'canceled'
+type TaskStatus = 'queued' | 'running' | 'paused' | 'completed' | 'failed' | 'canceled'
 type Language = 'zh' | 'en'
 type ViewMode = 'client' | 'ops'
 type UserRole = 'admin' | 'user'
@@ -68,6 +68,12 @@ type BatchCancelResult = {
   response: BatchCancelResponse
 }
 
+type DeleteConversationResponse = {
+  conversation_id: string
+  deleted_count: number
+  deleted_task_ids: string[]
+}
+
 type StreamEvent = {
   event_id?: number
   type?: string
@@ -96,6 +102,9 @@ const STREAM_EVENT_TYPES = [
   'info',
   'started',
   'token',
+  'paused',
+  'approval_granted',
+  'resume_requested',
   'cancel_requested',
   'canceled',
   'completed',
@@ -115,6 +124,7 @@ const AUTH_SESSION_STORAGE_KEY = 'synapse.web.auth.session'
 const CLIENT_CONVERSATION_ID_KEY = 'conversation_id'
 const CLIENT_USER_MESSAGE_KEY = 'user_message'
 const NEW_CONVERSATION_DRAFT_ID = '__draft__'
+const DEFAULT_APPROVED_TOOLS = 'browser_fetch,http_api,retrieval,calculator'
 
 function normalizeUsername(value: string): string {
   return value.trim().toLowerCase()
@@ -217,6 +227,8 @@ function statusClass(status?: string): string {
   switch (status) {
     case 'running':
       return 'status status-running'
+    case 'paused':
+      return 'status status-paused'
     case 'completed':
       return 'status status-completed'
     case 'failed':
@@ -225,6 +237,33 @@ function statusClass(status?: string): string {
       return 'status status-canceled'
     default:
       return 'status status-queued'
+  }
+}
+
+function formatEventMessage(message?: string): string {
+  const normalized = (message ?? '').trim()
+  if (normalized === '') {
+    return ''
+  }
+
+  try {
+    const parsed = JSON.parse(normalized) as {
+      agent_event?: string
+      payload?: Record<string, unknown>
+    }
+
+    if (typeof parsed.agent_event !== 'string') {
+      return normalized
+    }
+
+    const payloadText = parsed.payload ? JSON.stringify(parsed.payload) : ''
+    if (payloadText === '') {
+      return `agent.${parsed.agent_event}`
+    }
+
+    return `agent.${parsed.agent_event}: ${payloadText}`
+  } catch {
+    return normalized
   }
 }
 
@@ -303,6 +342,7 @@ function App() {
   const [refreshingTasks, setRefreshingTasks] = useState(false)
   const [replayingTaskID, setReplayingTaskID] = useState('')
   const [cancelingTaskID, setCancelingTaskID] = useState('')
+  const [approvingTaskID, setApprovingTaskID] = useState('')
   const [cancelReason, setCancelReason] = useState(
     language === 'zh' ? '手动停止' : 'manual stop',
   )
@@ -316,7 +356,13 @@ function App() {
     state: 'copied' | 'failed'
   } | null>(null)
   const [selectedConversationID, setSelectedConversationID] = useState('')
+  const [deletingConversationID, setDeletingConversationID] = useState('')
   const [responseByTaskID, setResponseByTaskID] = useState<Record<string, string>>({})
+  const [agentEnabled, setAgentEnabled] = useState(true)
+  const [memoryWriteEnabled, setMemoryWriteEnabled] = useState(true)
+  const [approvalGranted, setApprovalGranted] = useState(false)
+  const [approvedToolsInput, setApprovedToolsInput] = useState(DEFAULT_APPROVED_TOOLS)
+  const [showClientComposerTools, setShowClientComposerTools] = useState(false)
 
   // EventSource 与最近事件 ID 放在渲染流程外维护，用于任务切换时续传 SSE。
   const eventSourceRef = useRef<EventSource | null>(null)
@@ -333,7 +379,7 @@ function App() {
   )
 
   const isCancelableTask = (task: Task): boolean =>
-    task.status === 'queued' || task.status === 'running'
+    task.status === 'queued' || task.status === 'running' || task.status === 'paused'
 
   const selectedCancelableTaskIDs = useMemo(
     () =>
@@ -498,6 +544,8 @@ function App() {
         return tr('正在生成回复...', 'Generating response...')
       case 'completed':
         return tr('该任务已完成，但本地尚未缓存回复内容。', 'Task completed but response text is not cached yet.')
+      case 'paused':
+        return task.error || tr('任务已暂停，等待审批恢复。', 'Task is paused and waiting for approval.')
       case 'failed':
         return summarizeTaskError(task.error)
       case 'canceled':
@@ -550,6 +598,8 @@ function App() {
         return tr('排队中', 'queued')
       case 'running':
         return tr('执行中', 'running')
+      case 'paused':
+        return tr('已暂停', 'paused')
       case 'completed':
         return tr('已完成', 'completed')
       case 'failed':
@@ -584,6 +634,12 @@ function App() {
         return tr('开始', 'started')
       case 'token':
         return tr('Token', 'token')
+      case 'paused':
+        return tr('已暂停', 'paused')
+      case 'approval_granted':
+        return tr('审批通过', 'approval granted')
+      case 'resume_requested':
+        return tr('恢复请求', 'resume requested')
       case 'cancel_requested':
         return tr('收到取消请求', 'cancel requested')
       case 'canceled':
@@ -1301,6 +1357,20 @@ function App() {
 
       const metadata: Record<string, string> = {
         source: 'web-console',
+        agent_enabled: agentEnabled ? 'true' : 'false',
+        memory_write_enabled: memoryWriteEnabled ? 'true' : 'false',
+      }
+
+      if (approvalGranted) {
+        metadata.approval_granted = 'true'
+      }
+
+      const approvedTools = approvedToolsInput
+        .split(',')
+        .map((item) => item.trim())
+        .filter((item) => item.length > 0)
+      if (approvedTools.length > 0) {
+        metadata.approved_tools = approvedTools.join(',')
       }
 
       if (inClientMode) {
@@ -1367,6 +1437,84 @@ function App() {
     setPrompt('')
   }
 
+  const handleDeleteConversation = async (conversationID: string) => {
+    if (conversationID.trim() === '' || deletingConversationID !== '') {
+      return
+    }
+
+    const targetConversation = clientConversations.find((conversation) => conversation.id === conversationID)
+    const confirmMessage =
+      language === 'zh'
+        ? `确认删除会话“${targetConversation?.title || '未命名对话'}”吗？该会话的全部记录会被删除且不可恢复。`
+        : `Delete conversation "${targetConversation?.title || 'Untitled Chat'}"? All records in this conversation will be removed permanently.`
+    if (!window.confirm(confirmMessage)) {
+      return
+    }
+
+    setDeletingConversationID(conversationID)
+    setRequestError('')
+
+    try {
+      const response = await requestJson<DeleteConversationResponse>(
+        `/v1/conversations/${encodeURIComponent(conversationID)}`,
+        {
+          method: 'DELETE',
+        },
+      )
+
+      const deletedTaskIDSet = new Set(response.deleted_task_ids)
+      if (deletedTaskIDSet.size === 0) {
+        return
+      }
+
+      setTasks((previous) => previous.filter((task) => !deletedTaskIDSet.has(task.id)))
+      setSelectedTaskIDs((previous) => previous.filter((taskID) => !deletedTaskIDSet.has(taskID)))
+
+      setResponseByTaskID((previous) => {
+        const next = { ...previous }
+        response.deleted_task_ids.forEach((taskID) => {
+          delete next[taskID]
+        })
+        return next
+      })
+
+      response.deleted_task_ids.forEach((taskID) => {
+        delete taskLastEventIDRef.current[taskID]
+        const source = hydrationSourcesRef.current.get(taskID)
+        if (source) {
+          source.close()
+          hydrationSourcesRef.current.delete(taskID)
+        }
+        hydratingTaskIDsRef.current.delete(taskID)
+      })
+
+      const removedActiveTask = selectedTaskID !== '' && deletedTaskIDSet.has(selectedTaskID)
+      if (removedActiveTask || selectedConversationID === conversationID) {
+        eventSourceRef.current?.close()
+        eventSourceRef.current = null
+        setSelectedTaskID('')
+        setEvents([])
+        setLastEventID(0)
+        setStreamState('idle')
+      }
+
+      if (selectedConversationID === conversationID) {
+        transcriptPinnedToBottomRef.current = true
+        setSelectedConversationID('')
+      }
+
+      await refreshTasks()
+    } catch (error) {
+      setRequestError(
+        error instanceof Error
+          ? error.message
+          : tr('删除会话失败', 'Failed to delete conversation'),
+      )
+    } finally {
+      setDeletingConversationID('')
+    }
+  }
+
   const handleReplay = async (taskID: string) => {
     setReplayingTaskID(taskID)
     setRequestError('')
@@ -1395,6 +1543,40 @@ function App() {
       )
     } finally {
       setReplayingTaskID('')
+    }
+  }
+
+  const handleApproveResumeTask = async (taskID: string) => {
+    setApprovingTaskID(taskID)
+    setRequestError('')
+
+    const approvedTools = approvedToolsInput
+      .split(',')
+      .map((item) => item.trim())
+      .filter((item) => item.length > 0)
+
+    try {
+      const resumed = await requestJson<Task>(`/v1/tasks/${taskID}/approve`, {
+        method: 'POST',
+        body: JSON.stringify({
+          requested_by: currentUser?.username || 'web-console',
+          reason: tr('人工审批通过并恢复任务', 'Task approved and resumed by operator'),
+          approved_tools: approvedTools,
+        }),
+      })
+
+      upsertTask(resumed)
+      setSelectedTaskID(taskID)
+      await refreshTasks()
+      await refreshDeadLetters()
+    } catch (error) {
+      setRequestError(
+        error instanceof Error
+          ? error.message
+          : tr('审批恢复任务失败', 'Failed to approve and resume task'),
+      )
+    } finally {
+      setApprovingTaskID('')
     }
   }
 
@@ -1667,11 +1849,11 @@ function App() {
 
   if (viewMode === 'client') {
     return (
-      <div className="app-shell">
+      <div className="app-shell app-shell-client">
         <header className="topbar">
           <div>
             <p className="eyebrow">{tr('Synapse 用户端', 'Synapse Client')}</p>
-            <h1>{tr('智能任务客户端', 'Task Client')}</h1>
+            <h1>{tr('任务客户端', 'Task Client')}</h1>
           </div>
           <div className="topbar-actions">
             <div className="account-pill">
@@ -1738,29 +1920,48 @@ function App() {
             <ul className="conversation-list">
               {clientConversations.map((conversation) => (
                 <li key={conversation.id}>
-                  <button
+                  <article
                     className={
                       conversation.id === selectedConversationID
                         ? 'conversation-item active'
                         : 'conversation-item'
                     }
-                    onClick={() => handleSelectConversation(conversation.id)}
-                    type="button"
                   >
-                    <div className="conversation-row">
-                      <strong>{conversation.title || tr('未命名对话', 'Untitled Chat')}</strong>
-                      <span className={statusClass(conversation.latestTask.status)}>
-                        {taskStatusLabel(conversation.latestTask.status)}
-                      </span>
+                    <button
+                      className="conversation-main"
+                      disabled={deletingConversationID === conversation.id}
+                      onClick={() => handleSelectConversation(conversation.id)}
+                      type="button"
+                    >
+                      <div className="conversation-row">
+                        <strong>{conversation.title || tr('未命名对话', 'Untitled Chat')}</strong>
+                        <span className={statusClass(conversation.latestTask.status)}>
+                          {taskStatusLabel(conversation.latestTask.status)}
+                        </span>
+                      </div>
+                      <p>{conversation.preview}</p>
+                      <small>
+                        {formatDateTime(conversation.latestTask.updated_at)} ·{' '}
+                        {language === 'zh'
+                          ? `${conversation.taskCount} 轮`
+                          : `${conversation.taskCount} turns`}
+                      </small>
+                    </button>
+                    <div className="conversation-actions">
+                      <button
+                        className="ghost small conversation-delete"
+                        disabled={deletingConversationID === conversation.id}
+                        onClick={() => {
+                          void handleDeleteConversation(conversation.id)
+                        }}
+                        type="button"
+                      >
+                        {deletingConversationID === conversation.id
+                          ? tr('删除中...', 'Deleting...')
+                          : tr('删除', 'Delete')}
+                      </button>
                     </div>
-                    <p>{conversation.preview}</p>
-                    <small>
-                      {formatDateTime(conversation.latestTask.updated_at)} ·{' '}
-                      {language === 'zh'
-                        ? `${conversation.taskCount} 轮`
-                        : `${conversation.taskCount} turns`}
-                    </small>
-                  </button>
+                  </article>
                 </li>
               ))}
 
@@ -1831,6 +2032,52 @@ function App() {
             </div>
 
             <form className="client-composer" onSubmit={handleCreateTask}>
+              <div className="client-composer-head">
+                <button
+                  aria-controls="client-agent-controls"
+                  aria-expanded={showClientComposerTools}
+                  className="ghost small composer-settings-toggle"
+                  onClick={() => setShowClientComposerTools((previous) => !previous)}
+                  type="button"
+                >
+                  {showClientComposerTools
+                    ? tr('收起高级设置', 'Hide advanced settings')
+                    : tr('展开高级设置', 'Show advanced settings')}
+                </button>
+              </div>
+              {showClientComposerTools && (
+                <div className="agent-controls agent-controls-client" aria-live="polite" id="client-agent-controls">
+                  <label className="agent-toggle">
+                    <input
+                      checked={agentEnabled}
+                      onChange={(event) => setAgentEnabled(event.target.checked)}
+                      type="checkbox"
+                    />
+                    {tr('启用 Agent 规划循环', 'Enable agent planning loop')}
+                  </label>
+                  <label className="agent-toggle">
+                    <input
+                      checked={memoryWriteEnabled}
+                      onChange={(event) => setMemoryWriteEnabled(event.target.checked)}
+                      type="checkbox"
+                    />
+                    {tr('写入长期记忆', 'Write long-term memory')}
+                  </label>
+                  <label className="agent-toggle">
+                    <input
+                      checked={approvalGranted}
+                      onChange={(event) => setApprovalGranted(event.target.checked)}
+                      type="checkbox"
+                    />
+                    {tr('预授权高风险工具', 'Pre-approve high-risk tools')}
+                  </label>
+                  <input
+                    value={approvedToolsInput}
+                    onChange={(event) => setApprovedToolsInput(event.target.value)}
+                    placeholder={tr('授权工具列表（逗号分隔）', 'Approved tools (comma-separated)')}
+                  />
+                </div>
+              )}
               <textarea
                 value={prompt}
                 onChange={(event) => setPrompt(event.target.value)}
@@ -1964,6 +2211,38 @@ function App() {
               />
             </label>
 
+            <div className="agent-controls" aria-live="polite">
+              <label className="agent-toggle">
+                <input
+                  checked={agentEnabled}
+                  onChange={(event) => setAgentEnabled(event.target.checked)}
+                  type="checkbox"
+                />
+                {tr('启用 Agent 规划循环', 'Enable agent planning loop')}
+              </label>
+              <label className="agent-toggle">
+                <input
+                  checked={memoryWriteEnabled}
+                  onChange={(event) => setMemoryWriteEnabled(event.target.checked)}
+                  type="checkbox"
+                />
+                {tr('写入长期记忆', 'Write long-term memory')}
+              </label>
+              <label className="agent-toggle">
+                <input
+                  checked={approvalGranted}
+                  onChange={(event) => setApprovalGranted(event.target.checked)}
+                  type="checkbox"
+                />
+                {tr('预授权高风险工具', 'Pre-approve high-risk tools')}
+              </label>
+              <input
+                value={approvedToolsInput}
+                onChange={(event) => setApprovedToolsInput(event.target.value)}
+                placeholder={tr('授权工具列表（逗号分隔）', 'Approved tools (comma-separated)')}
+              />
+            </div>
+
             <button disabled={submitting} type="submit">
               {submitting ? tr('提交中...', 'Submitting...') : tr('加入队列', 'Queue Task')}
             </button>
@@ -1993,6 +2272,7 @@ function App() {
                 <option value="all">{tr('全部', 'all')}</option>
                 <option value="queued">{tr('排队中', 'queued')}</option>
                 <option value="running">{tr('执行中', 'running')}</option>
+                <option value="paused">{tr('已暂停', 'paused')}</option>
                 <option value="completed">{tr('已完成', 'completed')}</option>
                 <option value="failed">{tr('失败', 'failed')}</option>
                 <option value="canceled">{tr('已取消', 'canceled')}</option>
@@ -2176,7 +2456,20 @@ function App() {
               <span className="selected-task-id">{selectedTask.id}</span>
               <div className="selected-actions">
                 <span className={statusClass(selectedTask.status)}>{taskStatusLabel(selectedTask.status)}</span>
-                {(selectedTask.status === 'queued' || selectedTask.status === 'running') && (
+                {selectedTask.status === 'paused' && (
+                  <button
+                    disabled={approvingTaskID === selectedTask.id}
+                    onClick={() => {
+                      void handleApproveResumeTask(selectedTask.id)
+                    }}
+                    type="button"
+                  >
+                    {approvingTaskID === selectedTask.id
+                      ? tr('恢复中...', 'Resuming...')
+                      : tr('审批并恢复', 'Approve & Resume')}
+                  </button>
+                )}
+                {(selectedTask.status === 'queued' || selectedTask.status === 'running' || selectedTask.status === 'paused') && (
                   <button
                     className="danger"
                     disabled={cancelingTaskID === selectedTask.id}
@@ -2204,7 +2497,7 @@ function App() {
                 <div className="event-content">
                   {event.token && <code>{event.token}</code>}
                   {!event.token && (event.message || event.status) && (
-                    <p>{event.message ?? event.status}</p>
+                    <p>{formatEventMessage(event.message) || event.status}</p>
                   )}
                 </div>
               </li>

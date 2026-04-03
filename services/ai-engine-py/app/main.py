@@ -25,6 +25,17 @@ async def serve() -> None:
         openai_http_timeout_seconds=config.openai_http_timeout_seconds,
         openai_max_retries=config.openai_max_retries,
         openai_retry_backoff_seconds=config.openai_retry_backoff_seconds,
+        agent_enabled_default=config.agent_enabled_default,
+        agent_max_plan_steps=config.agent_max_plan_steps,
+        agent_require_approval_for_high_risk=config.agent_require_approval_for_high_risk,
+        agent_memory_file=config.agent_memory_file,
+        agent_memory_max_entries_per_user=config.agent_memory_max_entries_per_user,
+        agent_memory_recall_limit=config.agent_memory_recall_limit,
+        agent_tool_http_allowlist=config.agent_tool_http_allowlist,
+        agent_tool_http_timeout_seconds=config.agent_tool_http_timeout_seconds,
+        agent_enable_code_execution=config.agent_enable_code_execution,
+        agent_tool_policy_json=config.agent_tool_policy_json,
+        agent_tool_audit_log_file=config.agent_tool_audit_log_file,
     )
 
     # 启动异步 gRPC 服务并注册 AgentRuntime 服务实现。

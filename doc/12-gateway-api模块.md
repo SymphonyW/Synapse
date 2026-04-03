@@ -22,9 +22,10 @@ API 模块负责对外 HTTP 接口实现，包括认证、任务管理、SSE 事
 8. GET /v1/tasks/{taskID}
 9. POST /v1/tasks/{taskID}/cancel
 10. POST /v1/tasks/cancel
-11. POST /v1/tasks/{taskID}/replay
-12. GET /v1/tasks/{taskID}/events
-13. GET /v1/dead-letters
+11. POST /v1/tasks/{taskID}/approve
+12. POST /v1/tasks/{taskID}/replay
+13. GET /v1/tasks/{taskID}/events
+14. GET /v1/dead-letters
 
 ## 3. 认证相关行为
 
@@ -35,26 +36,28 @@ API 模块负责对外 HTTP 接口实现，包括认证、任务管理、SSE 事
 
 ## 4. 任务相关行为
 
-1. CreateTask：校验身份，创建 queued 任务，入队。
-2. GetTask/ListTasks：按身份过滤可见范围。
-3. CancelTask：支持首次取消与幂等取消。
-4. BatchCancel：支持部分成功并返回失败明细。
-5. ReplayTask：非 running 任务可重置并重新入队。
+1. CreateTask：强制使用会话用户名作为 user_id，创建 queued 任务并入队。
+2. CreateTask：会覆盖客户端伪造的 auth 元数据，并注入 auth_user_role/auth_username。
+3. GetTask/ListTasks：按身份过滤可见范围；status 过滤支持 queued/running/paused/completed/failed/canceled。
+4. CancelTask：支持首次取消与幂等取消；paused 任务也可取消。
+5. BatchCancel：支持部分成功并返回失败明细，结果顺序与请求首见顺序一致。
+6. ApproveTask：仅 paused 任务可审批恢复，写入 approval_granted/resume_requested 事件后重新入队。
+7. ReplayTask：仅 running 任务不可重放；其他状态（含 paused）可重置为 queued 重新执行。
 
 ## 5. SSE 事件流
 
 1. 接口：GET /v1/tasks/{taskID}/events
 2. 支持参数：last_event_id
 3. 终态任务在无新事件后发送 terminal 并关闭。
-4. 典型事件：started/token/completed/failed/cancel_requested/canceled。
+4. 典型事件：info/started/token/paused/approval_granted/resume_requested/cancel_requested/canceled/completed/failed/dead_lettered/replay_requested。
 
 ## 6. 返回码约定（关键）
 
 1. 401：未认证或会话失效
 2. 403：无权限访问资源
 3. 404：任务不存在
-4. 409：终态任务不可取消/不可重放
-5. 202：首次取消成功（异步语义）
+4. 409：任务状态冲突（如终态任务取消、非 paused 任务审批、running 任务重放）
+5. 202：异步接受（首次取消、审批恢复、重放）
 6. 200：幂等取消（已是 canceled）
 
 ## 7. 可维护性建议

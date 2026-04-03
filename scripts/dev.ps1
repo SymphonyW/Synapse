@@ -7,6 +7,7 @@ param(
         "gateway",
         "ai",
         "web",
+        "agent-regression",
         "up",
         "up-openai",
         "up-gemini",
@@ -91,6 +92,16 @@ switch ($Task) {
         Push-Location "apps/web"
         try {
             npm run dev
+        }
+        finally {
+            Pop-Location
+        }
+    }
+    "agent-regression" {
+        # 运行 Agent 评估基准与回归门禁。
+        Push-Location "services/ai-engine-py"
+        try {
+            python -m app.benchmarks.regression
         }
         finally {
             Pop-Location

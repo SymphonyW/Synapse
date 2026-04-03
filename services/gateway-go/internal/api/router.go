@@ -37,10 +37,12 @@ func NewRouter(handler *Handler) http.Handler {
 	mux.HandleFunc("GET /v1/auth/me", handler.GetCurrentUser)
 	mux.HandleFunc("GET /v1/tasks", handler.ListTasks)
 	mux.HandleFunc("POST /v1/tasks", handler.CreateTask)
+	mux.HandleFunc("DELETE /v1/conversations/{conversationID}", handler.DeleteConversation)
 	mux.HandleFunc("POST /v1/tasks/cancel", handler.BatchCancelTasks)
 	mux.HandleFunc("GET /v1/dead-letters", handler.ListDeadLetters)
 	mux.HandleFunc("GET /v1/tasks/{taskID}", handler.GetTask)
 	mux.HandleFunc("POST /v1/tasks/{taskID}/cancel", handler.CancelTask)
+	mux.HandleFunc("POST /v1/tasks/{taskID}/approve", handler.ApproveTask)
 	mux.HandleFunc("POST /v1/tasks/{taskID}/replay", handler.ReplayTask)
 	mux.HandleFunc("GET /v1/tasks/{taskID}/events", handler.StreamTaskEvents)
 

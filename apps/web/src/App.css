@@ -1,10 +1,45 @@
 .app-shell {
-  max-width: 1220px;
+  width: min(1760px, calc(100vw - 36px));
   margin: 0 auto;
   padding: 28px 28px 42px;
   display: flex;
   flex-direction: column;
   gap: 18px;
+}
+
+.app-shell-client {
+  padding: 16px clamp(16px, 1.5vw, 24px) 20px;
+  gap: 12px;
+}
+
+.app-shell-client .topbar {
+  align-items: center;
+  gap: 12px;
+}
+
+.app-shell-client .topbar-actions {
+  gap: 8px;
+}
+
+.app-shell-client .account-pill {
+  min-width: 182px;
+  border-radius: 12px;
+  padding: 6px 10px;
+}
+
+.app-shell-client .health-card {
+  min-width: 214px;
+  padding: 10px 12px;
+  border-radius: 14px;
+}
+
+.app-shell-client .health-card p,
+.app-shell-client .health-card span {
+  font-size: 0.78rem;
+}
+
+.app-shell-client .health-card strong {
+  margin: 0.2rem 0;
 }
 
 .auth-shell {
@@ -165,6 +200,8 @@
   display: flex;
   align-items: stretch;
   gap: 10px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
 }
 
 .language-switch {
@@ -235,11 +272,19 @@ h2 {
 
 .dashboard-grid {
   display: grid;
-  grid-template-columns: minmax(280px, 360px) minmax(0, 1fr);
-  gap: 16px;
+  grid-template-columns: minmax(300px, 390px) minmax(0, 1fr);
+  grid-template-rows: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 18px;
+  align-items: stretch;
+  height: calc(100dvh - 228px);
+  min-height: 560px;
   grid-template-areas:
     'compose stream'
     'tasks dead';
+}
+
+.dashboard-grid > .panel {
+  min-height: 0;
 }
 
 .client-grid {
@@ -254,16 +299,17 @@ h2 {
 
 .client-chat-shell {
   display: grid;
-  grid-template-columns: 320px minmax(0, 1fr);
-  gap: 16px;
+  grid-template-columns: minmax(246px, 17vw) minmax(0, 1fr);
+  gap: 14px;
   align-items: stretch;
-  height: calc(100dvh - 210px);
+  height: calc(100dvh - 126px);
+  min-height: 660px;
 }
 
 .client-sidebar {
   display: grid;
   grid-template-rows: auto 1fr;
-  gap: 12px;
+  gap: 10px;
   max-height: 100%;
   min-height: 0;
   background:
@@ -281,7 +327,7 @@ h2 {
 .sidebar-head-actions {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 6px;
   flex-wrap: wrap;
   justify-content: flex-end;
 }
@@ -304,11 +350,39 @@ h2 {
   border: 1px solid #d2e4f4;
   border-radius: 14px;
   background: linear-gradient(170deg, #ffffff, #f4faff);
-  padding: 10px;
+  padding: 8px;
   text-align: left;
   display: grid;
-  gap: 6px;
+  gap: 5px;
   box-shadow: 0 12px 22px -22px rgba(16, 42, 67, 0.85);
+}
+
+.conversation-main {
+  width: 100%;
+  border: 0;
+  background: transparent;
+  padding: 0;
+  margin: 0;
+  text-align: left;
+  display: grid;
+  gap: 5px;
+}
+
+.conversation-main:hover,
+.conversation-main:not(:disabled):hover {
+  transform: none;
+  filter: none;
+}
+
+.conversation-actions {
+  display: flex;
+  justify-content: flex-end;
+}
+
+.conversation-delete {
+  border-color: #e8c9c9;
+  background: #fff5f5;
+  color: #8a2c2c;
 }
 
 .conversation-item:hover {
@@ -338,8 +412,8 @@ h2 {
 .conversation-item p {
   margin: 0;
   color: #325472;
-  font-size: 0.82rem;
-  line-height: 1.45;
+  font-size: 0.8rem;
+  line-height: 1.35;
 }
 
 .conversation-item small {
@@ -359,7 +433,7 @@ h2 {
   min-height: 0;
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: 10px;
   overflow: hidden;
   background:
     radial-gradient(circle at 85% -20%, rgba(20, 184, 166, 0.15), transparent 44%),
@@ -371,7 +445,9 @@ h2 {
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
-  gap: 12px;
+  gap: 8px;
+  padding: 0 0 4px;
+  border-bottom: 1px solid rgba(190, 214, 233, 0.7);
 }
 
 .conversation-toolbar h2 {
@@ -379,31 +455,78 @@ h2 {
 }
 
 .conversation-toolbar p {
-  margin: 6px 0 0;
+  margin: 3px 0 0;
   color: #486987;
-  font-size: 0.86rem;
+  font-size: 0.8rem;
 }
 
 .client-composer {
   border: 1px solid #cadff1;
   border-radius: 16px;
   background: linear-gradient(180deg, #ffffff, #f4faff);
-  padding: 10px;
+  padding: 8px;
   display: grid;
-  gap: 8px;
+  gap: 6px;
   box-shadow: 0 14px 26px -24px rgba(16, 42, 67, 0.9);
   position: sticky;
   bottom: 0;
   z-index: 4;
 }
 
+.client-composer-head {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+}
+
+.composer-settings-toggle {
+  color: #20537c;
+  border-color: #c3daf0;
+}
+
+.agent-controls {
+  display: grid;
+  gap: 6px;
+  border: 1px dashed #bfd7eb;
+  border-radius: 12px;
+  padding: 8px;
+  background: rgba(236, 248, 255, 0.72);
+}
+
+.agent-toggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 0.82rem;
+  color: #2f516d;
+}
+
+.agent-controls input[type='text'],
+.agent-controls input:not([type]) {
+  width: 100%;
+}
+
+.agent-controls-client {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px 12px;
+}
+
+.agent-controls-client .agent-toggle:last-of-type {
+  grid-column: 1 / -1;
+}
+
+.agent-controls-client input[type='text'],
+.agent-controls-client input:not([type]) {
+  grid-column: 1 / -1;
+}
+
 .client-composer textarea {
   border: 0;
-  min-height: 98px;
+  min-height: 76px;
   resize: vertical;
   background: transparent;
   box-shadow: none;
-  padding: 6px 4px;
+  padding: 4px 2px;
 }
 
 .client-composer textarea:focus {
@@ -414,12 +537,14 @@ h2 {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 10px;
+  gap: 8px;
+  border-top: 1px solid #d9e6f3;
+  padding-top: 6px;
 }
 
 .client-composer-foot span {
   color: #5d7a95;
-  font-size: 0.8rem;
+  font-size: 0.76rem;
 }
 
 .client-composer-foot button {
@@ -439,10 +564,16 @@ h2 {
 
 .panel-compose {
   grid-area: compose;
+  display: flex;
+  flex-direction: column;
+  overflow: auto;
 }
 
 .panel-tasks {
   grid-area: tasks;
+  display: flex;
+  flex-direction: column;
+  overflow: auto;
 }
 
 .panel-stream {
@@ -451,6 +582,14 @@ h2 {
 
 .panel-dead {
   grid-area: dead;
+}
+
+.panel-stream,
+.panel-dead {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-height: 0;
 }
 
 .panel-client-compose {
@@ -502,12 +641,12 @@ h2 {
 }
 
 .chat-transcript {
-  margin-top: 6px;
+  margin-top: 4px;
   flex: 1;
   min-height: 0;
   max-height: none;
   overflow: auto;
-  padding: 16px;
+  padding: 14px;
   border-radius: 18px;
   border: 1px solid #ccdeef;
   background:
@@ -515,14 +654,14 @@ h2 {
     radial-gradient(circle at 94% 0%, rgba(206, 246, 239, 0.72), transparent 34%),
     linear-gradient(180deg, #f9fcff, #eef6ff 62%, #edf4ff);
   display: grid;
-  gap: 14px;
+  gap: 12px;
   box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.54);
 }
 
 .chat-message {
   display: grid;
   gap: 8px;
-  max-width: min(82%, 760px);
+  max-width: min(94%, 1100px);
   animation: rise-in 240ms ease-out;
 }
 
@@ -553,8 +692,8 @@ h2 {
   background: linear-gradient(180deg, #ffffff, #f9fcff);
   color: #163b5b;
   box-shadow: 0 14px 24px -22px rgba(16, 42, 67, 0.95);
-  padding: 11px 14px;
-  line-height: 1.52;
+  padding: 10px 13px;
+  line-height: 1.5;
 }
 
 .chat-user .chat-bubble {
@@ -717,6 +856,7 @@ h2 {
 .compose-form {
   display: grid;
   gap: 10px;
+  min-height: 0;
 }
 
 .compose-form label {
@@ -1110,6 +1250,47 @@ button:not(:disabled):hover {
   gap: 8px;
 }
 
+.dashboard-grid .panel-compose,
+.dashboard-grid .panel-tasks,
+.dashboard-grid .event-list,
+.dashboard-grid .dead-list,
+.dashboard-grid .ops-user-list-items,
+.dashboard-grid .batch-group ul {
+  scrollbar-width: thin;
+  scrollbar-color: #9bbede rgba(232, 243, 252, 0.82);
+}
+
+.dashboard-grid .panel-compose::-webkit-scrollbar,
+.dashboard-grid .panel-tasks::-webkit-scrollbar,
+.dashboard-grid .event-list::-webkit-scrollbar,
+.dashboard-grid .dead-list::-webkit-scrollbar,
+.dashboard-grid .ops-user-list-items::-webkit-scrollbar,
+.dashboard-grid .batch-group ul::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+.dashboard-grid .panel-compose::-webkit-scrollbar-track,
+.dashboard-grid .panel-tasks::-webkit-scrollbar-track,
+.dashboard-grid .event-list::-webkit-scrollbar-track,
+.dashboard-grid .dead-list::-webkit-scrollbar-track,
+.dashboard-grid .ops-user-list-items::-webkit-scrollbar-track,
+.dashboard-grid .batch-group ul::-webkit-scrollbar-track {
+  background: rgba(232, 243, 252, 0.7);
+  border-radius: 999px;
+}
+
+.dashboard-grid .panel-compose::-webkit-scrollbar-thumb,
+.dashboard-grid .panel-tasks::-webkit-scrollbar-thumb,
+.dashboard-grid .event-list::-webkit-scrollbar-thumb,
+.dashboard-grid .dead-list::-webkit-scrollbar-thumb,
+.dashboard-grid .ops-user-list-items::-webkit-scrollbar-thumb,
+.dashboard-grid .batch-group ul::-webkit-scrollbar-thumb {
+  background: linear-gradient(180deg, #9cc2e5, #7eaad2);
+  border-radius: 999px;
+  border: 2px solid rgba(232, 243, 252, 0.7);
+}
+
 .task-item {
   width: 100%;
   background: #f5fbff;
@@ -1185,8 +1366,18 @@ button:not(:disabled):hover {
 }
 
 .event-list {
-  max-height: 420px;
+  max-height: none;
   overflow: auto;
+  flex: 1;
+  min-height: 0;
+  padding-right: 4px;
+}
+
+.dead-list {
+  max-height: none;
+  overflow: auto;
+  flex: 1;
+  min-height: 0;
   padding-right: 4px;
 }
 
@@ -1274,6 +1465,11 @@ button:not(:disabled):hover {
   justify-content: center;
   border-radius: 999px;
   padding: 0.2rem 0.62rem;
+.status-paused {
+  color: #92400e;
+  border-color: #fcd34d;
+  background: #fffbeb;
+}
   font-size: 0.74rem;
   font-weight: 700;
   letter-spacing: 0.04em;
@@ -1357,6 +1553,38 @@ button:not(:disabled):hover {
   }
 }
 
+@media (min-width: 1500px) {
+  .app-shell {
+    width: min(1880px, calc(100vw - 28px));
+    padding: 24px clamp(22px, 1.7vw, 34px) 40px;
+  }
+
+  .app-shell-client {
+    padding: 14px clamp(14px, 1vw, 20px) 16px;
+  }
+
+  .client-chat-shell {
+    grid-template-columns: minmax(260px, 15vw) minmax(0, 1fr);
+    gap: 12px;
+    height: calc(100dvh - 106px);
+    min-height: 720px;
+  }
+
+  .chat-message {
+    max-width: min(95%, 1280px);
+  }
+
+  .dashboard-grid {
+    grid-template-columns: minmax(320px, 390px) minmax(560px, 1.45fr) minmax(300px, 1fr);
+    grid-template-rows: minmax(0, 1fr) minmax(0, 1fr);
+    grid-template-areas:
+      'compose stream dead'
+      'tasks stream dead';
+    height: calc(100dvh - 214px);
+    min-height: 600px;
+  }
+}
+
 @media (max-width: 980px) {
   .auth-shell {
     padding: 16px;
@@ -1370,6 +1598,7 @@ button:not(:disabled):hover {
   }
 
   .app-shell {
+    width: auto;
     padding: 14px;
   }
 
@@ -1397,6 +1626,9 @@ button:not(:disabled):hover {
   }
 
   .dashboard-grid {
+    height: auto;
+    min-height: auto;
+    grid-template-rows: auto;
     grid-template-columns: 1fr;
     grid-template-areas:
       'compose'
@@ -1416,6 +1648,7 @@ button:not(:disabled):hover {
   .client-chat-shell {
     grid-template-columns: 1fr;
     height: auto;
+    min-height: auto;
   }
 
   .client-chat-main {
@@ -1438,7 +1671,19 @@ button:not(:disabled):hover {
   }
 
   .client-composer {
-    padding: 8px;
+    padding: 10px;
+  }
+
+  .client-composer-head {
+    justify-content: stretch;
+  }
+
+  .composer-settings-toggle {
+    width: 100%;
+  }
+
+  .agent-controls-client {
+    grid-template-columns: 1fr;
   }
 
   .client-composer textarea {

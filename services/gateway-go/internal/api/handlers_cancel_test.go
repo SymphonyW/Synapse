@@ -312,6 +312,72 @@ func TestListDeadLettersForbiddenForRegularUser(t *testing.T) {
 	}
 }
 
+// 验证 paused 任务可通过审批接口恢复到 queued 并入队。
+func TestApproveTaskResumesPausedTask(t *testing.T) {
+	taskStore := store.NewInMemory()
+	seedTask(t, taskStore, "task-paused", domain.TaskPaused, "task paused: approval required")
+	_, _, err := taskStore.UpdateMetadata("task-paused", map[string]string{
+		metadataAgentRequiredToolKey: "http_api",
+		metadataAgentResumeStepKey:   "2",
+	})
+	if err != nil {
+		t.Fatalf("UpdateMetadata returned error: %v", err)
+	}
+
+	router := NewRouter(NewHandler(taskStore, noopAgentClient{}, queue.NewInMemoryQueue(8), &recordingTaskCanceler{}))
+	body := strings.NewReader(`{"approved_tools":["http_api"],"reason":"reviewed"}`)
+	request := httptest.NewRequest(http.MethodPost, "/v1/tasks/task-paused/approve", body)
+	request.Header.Set("Content-Type", "application/json")
+	attachSessionCookie(t, taskStore, request, "ops-console", domain.UserRoleAdmin)
+	response := httptest.NewRecorder()
+
+	router.ServeHTTP(response, request)
+
+	if response.Code != http.StatusAccepted {
+		t.Fatalf("unexpected status: got %d want %d", response.Code, http.StatusAccepted)
+	}
+
+	var task domain.Task
+	decodeJSON(t, response, &task)
+	if task.Status != domain.TaskQueued {
+		t.Fatalf("unexpected task status: got %q want %q", task.Status, domain.TaskQueued)
+	}
+
+	storedTask, ok := taskStore.Get("task-paused")
+	if !ok {
+		t.Fatal("task-paused not found in store")
+	}
+	if storedTask.Metadata[metadataApprovalGrantedKey] != "true" {
+		t.Fatalf("unexpected approval metadata: got %q", storedTask.Metadata[metadataApprovalGrantedKey])
+	}
+	if storedTask.Metadata[metadataApprovedToolsKey] != "http_api" {
+		t.Fatalf("unexpected approved tools metadata: got %q", storedTask.Metadata[metadataApprovedToolsKey])
+	}
+}
+
+// 验证非 paused 任务审批请求返回 409。
+func TestApproveTaskConflictWhenTaskNotPaused(t *testing.T) {
+	taskStore := store.NewInMemory()
+	seedTask(t, taskStore, "task-not-paused", domain.TaskQueued, "")
+
+	router := NewRouter(NewHandler(taskStore, noopAgentClient{}, queue.NewInMemoryQueue(8), &recordingTaskCanceler{}))
+	request := httptest.NewRequest(http.MethodPost, "/v1/tasks/task-not-paused/approve", nil)
+	attachSessionCookie(t, taskStore, request, "ops-console", domain.UserRoleAdmin)
+	response := httptest.NewRecorder()
+
+	router.ServeHTTP(response, request)
+
+	if response.Code != http.StatusConflict {
+		t.Fatalf("unexpected status: got %d want %d", response.Code, http.StatusConflict)
+	}
+
+	var payload map[string]string
+	decodeJSON(t, response, &payload)
+	if payload["error"] != "task is not paused" {
+		t.Fatalf("unexpected error response: %#v", payload)
+	}
+}
+
 // 构造指定状态的任务测试数据。
 func seedTask(t *testing.T, taskStore *store.InMemoryStore, taskID string, status domain.TaskStatus, errMessage string) {
 	t.Helper()

@@ -1,0 +1,55 @@
+[
+  {
+    "id": "calc_plan",
+    "prompt": "first calculate 8 * 9 then summarize the result",
+    "metadata": {
+      "agent_enabled": "true",
+      "auth_user_role": "admin",
+      "approval_granted": "true"
+    },
+    "min_success": 0.7
+  },
+  {
+    "id": "retrieval_context",
+    "prompt": "retrieve previous context and summarize what changed",
+    "metadata": {
+      "agent_enabled": "true",
+      "auth_user_role": "user",
+      "approval_granted": "true",
+      "model_messages_json": "[{\"role\":\"user\",\"content\":\"we discussed gateway retries\"},{\"role\":\"assistant\",\"content\":\"retry on retryable upstream failures\"}]"
+    },
+    "min_success": 0.65
+  },
+  {
+    "id": "http_with_approval",
+    "prompt": "visit https://example.com and summarize the page",
+    "metadata": {
+      "agent_enabled": "true",
+      "auth_user_role": "user",
+      "approval_granted": "true",
+      "approved_tools": "browser_fetch"
+    },
+    "min_success": 0.55
+  },
+  {
+    "id": "approval_pause",
+    "prompt": "call external api at https://example.com/api and summarize",
+    "metadata": {
+      "agent_enabled": "true",
+      "auth_user_role": "user",
+      "approval_granted": "false"
+    },
+    "expect_pause": true
+  },
+  {
+    "id": "code_exec_admin",
+    "prompt": "run code and evaluate 3 * (4 + 5)",
+    "metadata": {
+      "agent_enabled": "true",
+      "auth_user_role": "admin",
+      "approval_granted": "true",
+      "approved_tools": "code_exec"
+    },
+    "min_success": 0.7
+  }
+]

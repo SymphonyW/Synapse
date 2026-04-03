@@ -21,7 +21,8 @@ TaskProcessor 依赖：
 2. processWithRetry 控制重试生命周期。
 3. processTask 内部调用 agent.SubmitTask，持续 Recv 事件。
 4. 每条事件落库，必要时驱动状态更新。
-5. 终态后清理活跃任务上下文。
+5. 若收到 info 且内容为 approval_required，则写入恢复 metadata 并切换任务到 paused。
+6. 终态后清理活跃任务上下文。
 
 ## 4. 重试策略
 
@@ -35,14 +36,23 @@ TaskProcessor 依赖：
 2. Worker 通过 active map 找到 cancel func，终止当前执行上下文。
 3. finalizeCanceled 保留已有取消原因，并写入 canceled 事件。
 
-## 6. 死信语义
+## 6. 审批暂停与恢复语义
+
+1. Worker 解析 info 事件中的 agent_event=approval_required。
+2. 调用 TaskStore.UpdateMetadata 写入 approval_granted=false、agent_resume_step_index、agent_required_tool。
+3. 任务状态切换为 paused，并写入 paused 事件。
+4. 当 API 调用 approve 接口后，任务会重置为 queued 并重新入队。
+5. 完成态会清理 agent_resume_step_index 与 agent_required_tool。
+
+## 7. 死信语义
 
 1. 达到最大重试仍失败 -> finalizeFailed。
 2. 更新任务状态 failed。
 3. 记录 dead_letter_tasks。
 4. 写入 failed + dead_lettered 事件。
+5. paused 不属于失败终态，不会直接进入死信。
 
-## 7. 扩展建议
+## 8. 扩展建议
 
 1. 目前 Run 为串行消费，可扩展为可控并发 worker pool。
 2. 增加任务级超时、优先级、隔离队列等能力。

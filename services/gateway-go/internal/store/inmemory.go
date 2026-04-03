@@ -108,7 +108,7 @@ func (s *InMemoryStore) ListTasksByConversation(userID string, conversationID st
 			continue
 		}
 
-		if strings.TrimSpace(task.Metadata["conversation_id"]) != trimmedConversationID {
+		if !matchesConversationTask(task, trimmedConversationID) {
 			continue
 		}
 
@@ -131,6 +131,47 @@ func (s *InMemoryStore) ListTasksByConversation(userID string, conversationID st
 	return tasks, nil
 }
 
+// DeleteTasksByConversation 删除某用户在指定会话下的全部任务，并清理关联事件与死信。
+func (s *InMemoryStore) DeleteTasksByConversation(userID string, conversationID string) ([]string, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	trimmedUserID := strings.TrimSpace(userID)
+	trimmedConversationID := strings.TrimSpace(conversationID)
+	if trimmedUserID == "" || trimmedConversationID == "" {
+		return []string{}, nil
+	}
+
+	deletedTaskIDs := make([]string, 0)
+	for taskID, task := range s.tasks {
+		if task.UserID != trimmedUserID {
+			continue
+		}
+
+		if !matchesConversationTask(task, trimmedConversationID) {
+			continue
+		}
+
+		delete(s.tasks, taskID)
+		delete(s.events, taskID)
+		delete(s.deadLetters, taskID)
+		deletedTaskIDs = append(deletedTaskIDs, taskID)
+	}
+
+	sort.Strings(deletedTaskIDs)
+	return deletedTaskIDs, nil
+}
+
+func matchesConversationTask(task domain.Task, conversationID string) bool {
+	metadataConversationID := strings.TrimSpace(task.Metadata["conversation_id"])
+	if metadataConversationID != "" {
+		return metadataConversationID == conversationID
+	}
+
+	// 兼容历史数据：早期会话没有 conversation_id 时，前端按 task.id 作为会话键。
+	return strings.TrimSpace(task.ID) == conversationID
+}
+
 // UpdateStatus 更新任务状态和错误信息。
 func (s *InMemoryStore) UpdateStatus(taskID string, status domain.TaskStatus, errorMessage string) (domain.Task, bool) {
 	s.mu.Lock()
@@ -147,6 +188,40 @@ func (s *InMemoryStore) UpdateStatus(taskID string, status domain.TaskStatus, er
 	s.tasks[taskID] = task
 
 	return cloneTask(task), true
+}
+
+// UpdateMetadata 合并更新任务 metadata，空值表示删除对应 key。
+func (s *InMemoryStore) UpdateMetadata(taskID string, metadataUpdates map[string]string) (domain.Task, bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	task, ok := s.tasks[taskID]
+	if !ok {
+		return domain.Task{}, false, nil
+	}
+
+	if task.Metadata == nil {
+		task.Metadata = map[string]string{}
+	}
+
+	for key, value := range metadataUpdates {
+		trimmedKey := strings.TrimSpace(key)
+		if trimmedKey == "" {
+			continue
+		}
+
+		if strings.TrimSpace(value) == "" {
+			delete(task.Metadata, trimmedKey)
+			continue
+		}
+
+		task.Metadata[trimmedKey] = value
+	}
+
+	task.UpdatedAt = time.Now().UTC()
+	s.tasks[taskID] = task
+
+	return cloneTask(task), true, nil
 }
 
 // AppendEvent 为任务追加事件并分配递增事件 ID。

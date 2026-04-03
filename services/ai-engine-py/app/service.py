@@ -33,14 +33,45 @@ class AgentRuntimeService(agent_pb2_grpc.AgentRuntimeServicer):
         )
 
         try:
-            # 阶段 2：按 provider 输出逐 token 下发。
-            async for token in self._runtime.run_prompt(request.prompt, dict(request.metadata)):
-                yield agent_pb2.AgentEvent(
-                    type=agent_pb2.AGENT_EVENT_TYPE_TOKEN,
-                    token=token,
-                    trace_id=trace_id,
-                    emitted_at_unix_ms=int(time.time() * 1000),
-                )
+            # 阶段 2：按运行时事件流下发 info/token。
+            paused = False
+            async for runtime_event in self._runtime.run_task(
+                request.task_id,
+                request.user_id,
+                request.prompt,
+                dict(request.metadata),
+            ):
+                if runtime_event.kind == "token":
+                    yield agent_pb2.AgentEvent(
+                        type=agent_pb2.AGENT_EVENT_TYPE_TOKEN,
+                        token=runtime_event.token,
+                        trace_id=trace_id,
+                        emitted_at_unix_ms=int(time.time() * 1000),
+                    )
+                    continue
+
+                if runtime_event.kind == "info":
+                    yield agent_pb2.AgentEvent(
+                        type=agent_pb2.AGENT_EVENT_TYPE_INFO,
+                        message=runtime_event.message,
+                        trace_id=trace_id,
+                        emitted_at_unix_ms=int(time.time() * 1000),
+                    )
+                    continue
+
+                if runtime_event.kind == "pause":
+                    paused = True
+                    if runtime_event.message:
+                        yield agent_pb2.AgentEvent(
+                            type=agent_pb2.AGENT_EVENT_TYPE_INFO,
+                            message=runtime_event.message,
+                            trace_id=trace_id,
+                            emitted_at_unix_ms=int(time.time() * 1000),
+                        )
+                    break
+
+            if paused:
+                return
 
             # 阶段 3：token 流正常结束后发送 completed。
             yield agent_pb2.AgentEvent(

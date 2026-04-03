@@ -42,6 +42,12 @@ type cancelTaskRequest struct {
 	Reason      string `json:"reason"`
 }
 
+type approveTaskRequest struct {
+	RequestedBy   string   `json:"requested_by"`
+	Reason        string   `json:"reason"`
+	ApprovedTools []string `json:"approved_tools"`
+}
+
 type batchCancelTasksRequest struct {
 	TaskIDs     []string `json:"task_ids"`
 	RequestedBy string   `json:"requested_by"`
@@ -51,6 +57,12 @@ type batchCancelTasksRequest struct {
 type batchCancelFailure struct {
 	TaskID string `json:"task_id"`
 	Error  string `json:"error"`
+}
+
+type deleteConversationResponse struct {
+	ConversationID string   `json:"conversation_id"`
+	DeletedCount   int      `json:"deleted_count"`
+	DeletedTaskIDs []string `json:"deleted_task_ids"`
 }
 
 var errTaskTerminalState = errors.New("task already in terminal state")
@@ -67,11 +79,20 @@ const (
 	conversationContextTurnLimit = 8
 	conversationEventLoadLimit   = 8000
 
-	metadataConversationIDKey = "conversation_id"
-	metadataUserMessageKey    = "user_message"
-	metadataClientViewKey     = "client_view"
-	metadataModelPromptKey    = "model_prompt"
-	metadataModelMessagesKey  = "model_messages_json"
+	metadataConversationIDKey         = "conversation_id"
+	metadataUserMessageKey            = "user_message"
+	metadataClientViewKey             = "client_view"
+	metadataModelPromptKey            = "model_prompt"
+	metadataModelMessagesKey          = "model_messages_json"
+	metadataAuthUserRoleKey           = "auth_user_role"
+	metadataAuthUsernameKey           = "auth_username"
+	metadataAgentEnabledKey           = "agent_enabled"
+	metadataMemoryWriteKey            = "memory_write_enabled"
+	metadataApprovalGrantedKey        = "approval_granted"
+	metadataApprovedToolsKey          = "approved_tools"
+	metadataAgentResumeStepKey        = "agent_resume_step_index"
+	metadataAgentRequiredToolKey      = "agent_required_tool"
+	metadataAgentResumeRequestedByKey = "agent_resume_requested_by"
 )
 
 type conversationTurn struct {
@@ -157,6 +178,19 @@ func (h *Handler) CreateTask(w http.ResponseWriter, r *http.Request) {
 	// model_prompt 由网关负责构建，忽略客户端透传值，避免上下文注入污染。
 	delete(task.Metadata, metadataModelPromptKey)
 	delete(task.Metadata, metadataModelMessagesKey)
+	delete(task.Metadata, metadataAuthUserRoleKey)
+	delete(task.Metadata, metadataAuthUsernameKey)
+
+	// 权限元数据由网关注入，禁止客户端伪造。
+	task.Metadata[metadataAuthUserRoleKey] = string(session.Role)
+	task.Metadata[metadataAuthUsernameKey] = userID
+
+	if _, exists := task.Metadata[metadataAgentEnabledKey]; !exists {
+		task.Metadata[metadataAgentEnabledKey] = "true"
+	}
+	if _, exists := task.Metadata[metadataMemoryWriteKey]; !exists {
+		task.Metadata[metadataMemoryWriteKey] = "true"
+	}
 
 	conversationID := strings.TrimSpace(task.Metadata[metadataConversationIDKey])
 	isConversationTask := conversationID != "" || strings.EqualFold(strings.TrimSpace(task.Metadata[metadataClientViewKey]), "chat")
@@ -285,6 +319,43 @@ func (h *Handler) ListTasks(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// DeleteConversation 删除当前用户某会话下的全部任务（含事件与死信记录）。
+func (h *Handler) DeleteConversation(w http.ResponseWriter, r *http.Request) {
+	session, ok := h.requireSession(w, r)
+	if !ok {
+		return
+	}
+
+	conversationID := strings.TrimSpace(r.PathValue("conversationID"))
+	if conversationID == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "conversation_id is required"})
+		return
+	}
+
+	deletedTaskIDs, err := h.store.DeleteTasksByConversation(session.Username, conversationID)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to delete conversation"})
+		return
+	}
+
+	if len(deletedTaskIDs) == 0 {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "conversation not found"})
+		return
+	}
+
+	if h.taskCanceler != nil {
+		for _, taskID := range deletedTaskIDs {
+			h.taskCanceler.Cancel(taskID)
+		}
+	}
+
+	writeJSON(w, http.StatusOK, deleteConversationResponse{
+		ConversationID: conversationID,
+		DeletedCount:   len(deletedTaskIDs),
+		DeletedTaskIDs: deletedTaskIDs,
+	})
+}
+
 // ReplayTask 将非 running 任务重置为 queued，并重新入队执行。
 func (h *Handler) ReplayTask(w http.ResponseWriter, r *http.Request) {
 	session, ok := h.requireSession(w, r)
@@ -331,6 +402,102 @@ func (h *Handler) ReplayTask(w http.ResponseWriter, r *http.Request) {
 			EmittedAtUnixMS: time.Now().UTC().UnixMilli(),
 		})
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to enqueue replay task"})
+		return
+	}
+
+	writeJSON(w, http.StatusAccepted, updatedTask)
+}
+
+// ApproveTask 对 paused 任务授予审批并重新入队，从暂停点恢复执行。
+func (h *Handler) ApproveTask(w http.ResponseWriter, r *http.Request) {
+	session, ok := h.requireSession(w, r)
+	if !ok {
+		return
+	}
+
+	taskID := r.PathValue("taskID")
+	request, err := parseApproveTaskRequest(r)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
+		return
+	}
+	request.RequestedBy = session.Username
+
+	task, exists := h.store.Get(taskID)
+	if !exists {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "task not found"})
+		return
+	}
+
+	if !canAccessTask(session, task) {
+		writeJSON(w, http.StatusForbidden, map[string]string{"error": "forbidden"})
+		return
+	}
+
+	if task.Status != domain.TaskPaused {
+		writeJSON(w, http.StatusConflict, map[string]string{"error": "task is not paused"})
+		return
+	}
+
+	approvedTools := normalizeApprovedTools(request.ApprovedTools)
+	if len(approvedTools) == 0 {
+		requiredTool := strings.TrimSpace(task.Metadata[metadataAgentRequiredToolKey])
+		if requiredTool != "" {
+			approvedTools = append(approvedTools, requiredTool)
+		}
+	}
+
+	metadataUpdates := map[string]string{
+		metadataApprovalGrantedKey:        "true",
+		metadataAuthUserRoleKey:           string(session.Role),
+		metadataAuthUsernameKey:           session.Username,
+		metadataAgentResumeRequestedByKey: session.Username,
+	}
+	if len(approvedTools) > 0 {
+		metadataUpdates[metadataApprovedToolsKey] = strings.Join(approvedTools, ",")
+	}
+
+	if _, ok, updateErr := h.store.UpdateMetadata(taskID, metadataUpdates); updateErr != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to persist approval metadata"})
+		return
+	} else if !ok {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "task not found"})
+		return
+	}
+
+	updatedTask, ok := h.store.UpdateStatus(taskID, domain.TaskQueued, "")
+	if !ok {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "task not found"})
+		return
+	}
+
+	approvalMessage := "approval granted"
+	if request.RequestedBy != "" {
+		approvalMessage = "approval granted by " + request.RequestedBy
+	}
+	if request.Reason != "" {
+		approvalMessage += ": " + request.Reason
+	}
+
+	_, _ = h.store.AppendEvent(taskID, domain.TaskEvent{
+		Type:            "approval_granted",
+		Message:         approvalMessage,
+		EmittedAtUnixMS: time.Now().UTC().UnixMilli(),
+	})
+	_, _ = h.store.AppendEvent(taskID, domain.TaskEvent{
+		Type:            "resume_requested",
+		Message:         "task resume requested",
+		EmittedAtUnixMS: time.Now().UTC().UnixMilli(),
+	})
+
+	if err := h.taskQueue.Enqueue(r.Context(), taskID); err != nil {
+		h.store.UpdateStatus(taskID, domain.TaskFailed, "failed to enqueue approved task")
+		_, _ = h.store.AppendEvent(taskID, domain.TaskEvent{
+			Type:            "failed",
+			Message:         "failed to enqueue approved task",
+			EmittedAtUnixMS: time.Now().UTC().UnixMilli(),
+		})
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to enqueue task"})
 		return
 	}
 
@@ -766,6 +933,56 @@ func parseCancelTaskRequest(r *http.Request) (cancelTaskRequest, error) {
 	return request, nil
 }
 
+// parseApproveTaskRequest 支持可选 body；空 body 表示使用默认审批参数。
+func parseApproveTaskRequest(r *http.Request) (approveTaskRequest, error) {
+	if r.Body == nil {
+		return approveTaskRequest{}, nil
+	}
+
+	data, err := io.ReadAll(io.LimitReader(r.Body, 16*1024))
+	if err != nil {
+		return approveTaskRequest{}, err
+	}
+
+	if strings.TrimSpace(string(data)) == "" {
+		return approveTaskRequest{}, nil
+	}
+
+	var request approveTaskRequest
+	decoder := json.NewDecoder(strings.NewReader(string(data)))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&request); err != nil {
+		return approveTaskRequest{}, err
+	}
+
+	request.RequestedBy = strings.TrimSpace(request.RequestedBy)
+	request.Reason = strings.TrimSpace(request.Reason)
+	request.ApprovedTools = normalizeApprovedTools(request.ApprovedTools)
+	return request, nil
+}
+
+func normalizeApprovedTools(rawTools []string) []string {
+	if len(rawTools) == 0 {
+		return []string{}
+	}
+
+	seen := map[string]struct{}{}
+	normalized := make([]string, 0, len(rawTools))
+	for _, tool := range rawTools {
+		value := strings.ToLower(strings.TrimSpace(tool))
+		if value == "" {
+			continue
+		}
+		if _, exists := seen[value]; exists {
+			continue
+		}
+		seen[value] = struct{}{}
+		normalized = append(normalized, value)
+	}
+
+	return normalized
+}
+
 // parseBatchCancelTasksRequest 要求 JSON body，并对 task_ids 做去空白处理。
 func parseBatchCancelTasksRequest(r *http.Request) (batchCancelTasksRequest, error) {
 	if r.Body == nil {
@@ -875,7 +1092,7 @@ func canAccessTask(session domain.AuthSession, task domain.Task) bool {
 // isAllowedTaskStatus 集中维护状态过滤参数的合法值。
 func isAllowedTaskStatus(status string) bool {
 	switch status {
-	case string(domain.TaskQueued), string(domain.TaskRunning), string(domain.TaskCompleted), string(domain.TaskFailed), string(domain.TaskCanceled):
+	case string(domain.TaskQueued), string(domain.TaskRunning), string(domain.TaskPaused), string(domain.TaskCompleted), string(domain.TaskFailed), string(domain.TaskCanceled):
 		return true
 	default:
 		return false

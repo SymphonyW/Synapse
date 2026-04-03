@@ -12,6 +12,8 @@ const (
 	TaskRunning TaskStatus = "running"
 	// TaskCompleted 任务成功完成。
 	TaskCompleted TaskStatus = "completed"
+	// TaskPaused 任务因等待审批而暂停。
+	TaskPaused TaskStatus = "paused"
 	// TaskFailed 任务执行失败。
 	TaskFailed TaskStatus = "failed"
 	// TaskCanceled 任务被取消。

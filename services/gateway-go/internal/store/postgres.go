@@ -176,7 +176,11 @@ func (s *PostgresStore) ListTasksByConversation(userID string, conversationID st
 		ctx,
 		`SELECT id, user_id, prompt, status, error, metadata, created_at, updated_at
 		 FROM tasks
-		 WHERE user_id = $1 AND metadata->>'conversation_id' = $2
+		 WHERE user_id = $1
+		   AND (
+			 metadata->>'conversation_id' = $2
+			 OR (COALESCE(metadata->>'conversation_id', '') = '' AND id = $2)
+		   )
 		 ORDER BY created_at DESC
 		 LIMIT $3`,
 		trimmedUserID,
@@ -208,6 +212,50 @@ func (s *PostgresStore) ListTasksByConversation(userID string, conversationID st
 	return tasks, nil
 }
 
+// DeleteTasksByConversation 删除某用户在指定会话下的全部任务，返回已删除任务 ID。
+func (s *PostgresStore) DeleteTasksByConversation(userID string, conversationID string) ([]string, error) {
+	trimmedUserID := strings.TrimSpace(userID)
+	trimmedConversationID := strings.TrimSpace(conversationID)
+	if trimmedUserID == "" || trimmedConversationID == "" {
+		return []string{}, nil
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), dbOperationTimeout)
+	defer cancel()
+
+	rows, err := s.db.QueryContext(
+		ctx,
+		`DELETE FROM tasks
+		 WHERE user_id = $1
+		   AND (
+			 metadata->>'conversation_id' = $2
+			 OR (COALESCE(metadata->>'conversation_id', '') = '' AND id = $2)
+		   )
+		 RETURNING id`,
+		trimmedUserID,
+		trimmedConversationID,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	deletedTaskIDs := make([]string, 0)
+	for rows.Next() {
+		var taskID string
+		if scanErr := rows.Scan(&taskID); scanErr != nil {
+			return nil, scanErr
+		}
+		deletedTaskIDs = append(deletedTaskIDs, taskID)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	return deletedTaskIDs, nil
+}
+
 // UpdateStatus 原子更新任务状态并返回最新任务快照。
 func (s *PostgresStore) UpdateStatus(taskID string, status domain.TaskStatus, errorMessage string) (domain.Task, bool) {
 	ctx, cancel := context.WithTimeout(context.Background(), dbOperationTimeout)
@@ -233,6 +281,68 @@ func (s *PostgresStore) UpdateStatus(taskID string, status domain.TaskStatus, er
 	}
 
 	return task, true
+}
+
+// UpdateMetadata 合并更新任务 metadata，空值表示删除对应 key。
+func (s *PostgresStore) UpdateMetadata(taskID string, metadataUpdates map[string]string) (domain.Task, bool, error) {
+	if len(metadataUpdates) == 0 {
+		task, ok := s.Get(taskID)
+		if !ok {
+			return domain.Task{}, false, nil
+		}
+		return task, true, nil
+	}
+
+	task, ok := s.Get(taskID)
+	if !ok {
+		return domain.Task{}, false, nil
+	}
+
+	if task.Metadata == nil {
+		task.Metadata = map[string]string{}
+	}
+
+	for key, value := range metadataUpdates {
+		trimmedKey := strings.TrimSpace(key)
+		if trimmedKey == "" {
+			continue
+		}
+
+		if strings.TrimSpace(value) == "" {
+			delete(task.Metadata, trimmedKey)
+			continue
+		}
+
+		task.Metadata[trimmedKey] = value
+	}
+
+	metadataJSON, err := json.Marshal(task.Metadata)
+	if err != nil {
+		return domain.Task{}, false, err
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), dbOperationTimeout)
+	defer cancel()
+
+	row := s.db.QueryRowContext(
+		ctx,
+		`UPDATE tasks
+		 SET metadata = $2, updated_at = NOW()
+		 WHERE id = $1
+		 RETURNING id, user_id, prompt, status, error, metadata, created_at, updated_at`,
+		taskID,
+		metadataJSON,
+	)
+
+	updatedTask, scanErr := scanTask(row)
+	if errors.Is(scanErr, sql.ErrNoRows) {
+		return domain.Task{}, false, nil
+	}
+	if scanErr != nil {
+		return domain.Task{}, false, scanErr
+	}
+
+	return updatedTask, true, nil
 }
 
 // AppendEvent 追加任务事件；若外键任务不存在，映射为 ErrTaskNotFound。

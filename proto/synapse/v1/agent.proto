@@ -1,0 +1,47 @@
+syntax = "proto3";
+
+package synapse.v1;
+
+option go_package = "github.com/synapse/synapse/services/gateway-go/internal/gen/synapse/v1;agentv1";
+
+// 健康检查请求体，当前无字段。
+message HealthRequest {}
+
+// 健康检查响应，包含运行状态与模型提供方。
+message HealthResponse {
+  string status = 1;
+  string model_provider = 2;
+}
+
+// 网关提交任务时传递的请求载荷。
+message SubmitTaskRequest {
+  string task_id = 1;
+  string user_id = 2;
+  string prompt = 3;
+  map<string, string> metadata = 4;
+}
+
+// Agent 事件类型枚举。
+enum AgentEventType {
+  AGENT_EVENT_TYPE_UNSPECIFIED = 0;
+  AGENT_EVENT_TYPE_STARTED = 1;
+  AGENT_EVENT_TYPE_TOKEN = 2;
+  AGENT_EVENT_TYPE_INFO = 3;
+  AGENT_EVENT_TYPE_COMPLETED = 4;
+  AGENT_EVENT_TYPE_FAILED = 5;
+}
+
+// Agent 流式事件载荷。
+message AgentEvent {
+  AgentEventType type = 1;
+  string message = 2;
+  string token = 3;
+  string trace_id = 4;
+  int64 emitted_at_unix_ms = 5;
+}
+
+// 运行时服务：提供健康检查与任务流式执行。
+service AgentRuntime {
+  rpc Health(HealthRequest) returns (HealthResponse);
+  rpc SubmitTask(SubmitTaskRequest) returns (stream AgentEvent);
+}

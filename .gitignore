@@ -1,0 +1,61 @@
+# 操作系统与编辑器
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/*
+!.vscode/extensions.json
+*.swp
+*.swo
+
+# 日志
+logs/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+
+# 环境变量与本地覆盖
+.env
+.env.*
+!.env.example
+!.env.*.example
+docker-compose.*.env
+!docker-compose.*.env.example
+
+# Node / Vite 构建产物
+**/node_modules/
+**/dist/
+**/dist-ssr/
+**/.vite/
+**/.cache/
+**/*.tsbuildinfo
+**/*.local
+
+# Python 缓存与虚拟环境
+**/__pycache__/
+**/*.py[cod]
+**/.pytest_cache/
+**/.mypy_cache/
+**/.ruff_cache/
+**/.coverage
+**/htmlcov/
+.venv/
+venv/
+
+# Go 构建与测试产物
+**/bin/
+**/*.exe
+**/*.test
+**/*.out
+**/coverage.out
+
+# 生成代码
+services/gateway-go/internal/gen/
+services/ai-engine-py/synapse/
+
+# 临时文件
+*.tmp
+*.temp
+*.bak

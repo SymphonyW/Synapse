@@ -8,9 +8,13 @@ param(
         "ai",
         "web",
         "agent-regression",
+        "verify-agent-mode",
         "up",
+        "up-mirror",
         "up-openai",
+        "up-openai-mirror",
         "up-gemini",
+        "up-gemini-mirror",
         "up-zhipu",
         "up-zhipu-mirror",
         "down"
@@ -54,6 +58,43 @@ function Invoke-ComposeUpWithEnvFiles {
 
     $composeArgs += @("up", "--build", "-d")
     docker compose @composeArgs
+}
+
+function Invoke-VerifyAgentMode {
+    Push-Location "services/ai-engine-py"
+    try {
+        $pythonSnippet = @'
+import json
+from app.config import load_config
+
+config = load_config()
+summary = {
+    "model_provider": config.model_provider,
+    "model_provider_alias": config.model_provider_alias,
+    "agent_enabled_default": config.agent_enabled_default,
+    "agent_max_plan_steps": config.agent_max_plan_steps,
+    "agent_require_approval_for_high_risk": config.agent_require_approval_for_high_risk,
+    "agent_memory_file": config.agent_memory_file,
+    "agent_memory_max_entries_per_user": config.agent_memory_max_entries_per_user,
+    "agent_memory_recall_limit": config.agent_memory_recall_limit,
+    "agent_tool_http_allowlist": list(config.agent_tool_http_allowlist),
+    "agent_tool_http_timeout_seconds": config.agent_tool_http_timeout_seconds,
+    "agent_enable_code_execution": config.agent_enable_code_execution,
+    "agent_tool_policy_json_configured": bool(config.agent_tool_policy_json.strip()),
+    "agent_tool_audit_log_file": config.agent_tool_audit_log_file,
+}
+
+print(json.dumps(summary, ensure_ascii=True, indent=2))
+
+if config.model_provider == "openai" and not config.openai_api_key:
+    raise SystemExit("SYNAPSE_OPENAI_API_KEY is required when SYNAPSE_MODEL_PROVIDER=openai")
+'@
+
+        $pythonSnippet | python -
+    }
+    finally {
+        Pop-Location
+    }
 }
 
 switch ($Task) {
@@ -107,17 +148,33 @@ switch ($Task) {
             Pop-Location
         }
     }
+    "verify-agent-mode" {
+        # 校验并打印当前 Agent 运行模式关键配置。
+        Invoke-VerifyAgentMode
+    }
     "up" {
         # 通过 Docker Compose 启动全部服务，后台运行。
         docker compose up --build -d
+    }
+    "up-mirror" {
+        # 网络受限场景：仅使用镜像源加速启动默认配置。
+        Invoke-ComposeUpWithEnvFiles -EnvFiles @("docker-compose.mirror.env")
     }
     "up-openai" {
         # 使用 OpenAI 配置文件启动全栈。
         Invoke-ComposeUpWithEnvFiles -EnvFiles @("docker-compose.openai.env")
     }
+    "up-openai-mirror" {
+        # 网络受限场景：镜像代理 + OpenAI 配置联合启动。
+        Invoke-ComposeUpWithEnvFiles -EnvFiles @("docker-compose.mirror.env", "docker-compose.openai.env")
+    }
     "up-gemini" {
         # 使用 Gemini 配置文件启动全栈。
         Invoke-ComposeUpWithEnvFiles -EnvFiles @("docker-compose.gemini.env")
+    }
+    "up-gemini-mirror" {
+        # 网络受限场景：镜像代理 + Gemini 配置联合启动。
+        Invoke-ComposeUpWithEnvFiles -EnvFiles @("docker-compose.mirror.env", "docker-compose.gemini.env")
     }
     "up-zhipu" {
         # 使用智谱配置文件启动全栈。

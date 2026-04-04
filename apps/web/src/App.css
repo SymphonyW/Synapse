@@ -299,7 +299,7 @@ h2 {
 
 .client-chat-shell {
   display: grid;
-  grid-template-columns: minmax(246px, 17vw) minmax(0, 1fr);
+  grid-template-columns: minmax(290px, 20vw) minmax(0, 1fr);
   gap: 14px;
   align-items: stretch;
   height: calc(100dvh - 126px);
@@ -341,12 +341,18 @@ h2 {
   align-content: start;
   max-height: none;
   min-height: 0;
-  overflow: auto;
-  padding-right: 4px;
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding-right: 2px;
+}
+
+.conversation-list > li {
+  min-width: 0;
 }
 
 .conversation-item {
   width: 100%;
+  min-width: 0;
   border: 1px solid #d2e4f4;
   border-radius: 14px;
   background: linear-gradient(170deg, #ffffff, #f4faff);
@@ -354,11 +360,13 @@ h2 {
   text-align: left;
   display: grid;
   gap: 5px;
+  overflow: hidden;
   box-shadow: 0 12px 22px -22px rgba(16, 42, 67, 0.85);
 }
 
 .conversation-main {
   width: 100%;
+  min-width: 0;
   border: 0;
   background: transparent;
   padding: 0;
@@ -401,12 +409,16 @@ h2 {
   align-items: flex-start;
   justify-content: space-between;
   gap: 8px;
+  min-width: 0;
 }
 
 .conversation-row strong {
+  flex: 1;
+  min-width: 0;
   color: #173f5f;
   font-size: 0.92rem;
   line-height: 1.35;
+  overflow-wrap: anywhere;
 }
 
 .conversation-item p {
@@ -414,12 +426,16 @@ h2 {
   color: #325472;
   font-size: 0.8rem;
   line-height: 1.35;
+  overflow-wrap: anywhere;
 }
 
 .conversation-item small {
+  display: block;
+  min-width: 0;
   color: #6b839b;
   font-size: 0.75rem;
   font-family: 'IBM Plex Mono', monospace;
+  overflow-wrap: anywhere;
 }
 
 .sidebar-empty {
@@ -1465,15 +1481,18 @@ button:not(:disabled):hover {
   justify-content: center;
   border-radius: 999px;
   padding: 0.2rem 0.62rem;
-.status-paused {
-  color: #92400e;
-  border-color: #fcd34d;
-  background: #fffbeb;
-}
   font-size: 0.74rem;
   font-weight: 700;
   letter-spacing: 0.04em;
   text-transform: uppercase;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.status-paused {
+  color: #92400e;
+  border-color: #fcd34d;
+  background: #fffbeb;
 }
 
 .status-queued {
@@ -1564,7 +1583,7 @@ button:not(:disabled):hover {
   }
 
   .client-chat-shell {
-    grid-template-columns: minmax(260px, 15vw) minmax(0, 1fr);
+    grid-template-columns: minmax(320px, 19vw) minmax(0, 1fr);
     gap: 12px;
     height: calc(100dvh - 106px);
     min-height: 720px;

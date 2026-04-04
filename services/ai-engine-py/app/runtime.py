@@ -234,6 +234,12 @@ class AgentRuntime:
         self._openai_http_timeout_seconds = max(5.0, openai_http_timeout_seconds)
         self._openai_max_retries = max(1, openai_max_retries)
         self._openai_retry_backoff_seconds = max(0.2, openai_retry_backoff_seconds)
+        self._agent_generation_timeout_seconds = min(
+            30.0, max(15.0, self._openai_http_timeout_seconds * 0.55)
+        )
+        self._agent_rescue_timeout_seconds = min(
+            14.0, max(8.0, self._openai_http_timeout_seconds * 0.3)
+        )
         self._agent_enabled_default = agent_enabled_default
         self._agent_max_plan_steps = max(1, agent_max_plan_steps)
         self._agent_require_approval_for_high_risk = agent_require_approval_for_high_risk
@@ -311,8 +317,21 @@ class AgentRuntime:
     ) -> AsyncIterator[RuntimeStreamItem]:
         metadata_map = dict(metadata or {})
         if not self._is_agent_enabled(metadata_map):
-            async for token in self.run_prompt(prompt, metadata_map):
-                yield RuntimeStreamItem(kind="token", token=token)
+            provider_error = ""
+            try:
+                async for token in self._run_prompt_with_timeout(
+                    prompt,
+                    metadata_map,
+                    timeout_seconds=self._agent_generation_timeout_seconds,
+                ):
+                    yield RuntimeStreamItem(kind="token", token=token)
+            except Exception as exc:
+                provider_error = str(exc)
+
+            if provider_error:
+                fallback = self._build_model_unavailable_response(provider_error)
+                for chunk in self._chunk_text(fallback):
+                    yield RuntimeStreamItem(kind="token", token=chunk)
             return
 
         started_at = time.time()
@@ -527,7 +546,8 @@ class AgentRuntime:
         )
 
         final_response_chunks: list[str] = []
-        synthesis_failed = False
+        synthesis_error = ""
+        use_direct_generation = tool_call_count == 0 and blocked_actions == 0
         if self.model_provider == "mock":
             mock_answer = self._build_mock_user_facing_answer(
                 prompt=normalized_prompt,
@@ -538,32 +558,82 @@ class AgentRuntime:
                 final_response_chunks.append(chunk)
                 yield RuntimeStreamItem(kind="token", token=chunk)
         else:
-            synthesis_prompt = self._build_user_facing_prompt(
-                prompt=normalized_prompt,
-                short_context=short_context,
-                recalled_memories=recalled_memories,
-                step_summaries=step_summaries,
-                evaluation=evaluation,
+            generation_prompt = normalized_prompt
+            generation_metadata: dict[str, str] | None = metadata_map
+            generation_mode = "direct"
+            if not use_direct_generation:
+                generation_prompt = self._build_user_facing_prompt(
+                    prompt=normalized_prompt,
+                    short_context=short_context,
+                    recalled_memories=recalled_memories,
+                    step_summaries=step_summaries,
+                    evaluation=evaluation,
+                )
+                generation_metadata = None
+                generation_mode = "planner"
+
+            yield RuntimeStreamItem(
+                kind="info",
+                message=self._encode_agent_info(
+                    phase="synthesis_mode",
+                    payload={
+                        "mode": generation_mode,
+                    },
+                ),
             )
+
             try:
-                async for chunk in self.run_prompt(synthesis_prompt, metadata=None):
+                async for chunk in self._run_prompt_with_timeout(
+                    generation_prompt,
+                    generation_metadata,
+                    timeout_seconds=self._agent_generation_timeout_seconds,
+                ):
                     if not chunk:
                         continue
                     final_response_chunks.append(chunk)
                     yield RuntimeStreamItem(kind="token", token=chunk)
-            except Exception:
-                synthesis_failed = True
+            except Exception as exc:
+                synthesis_error = str(exc)
 
         final_response = "".join(final_response_chunks).strip()
-        if not final_response:
-            synthesis_failed = True
+        synthesis_failed = final_response == ""
+        if synthesis_failed and synthesis_error == "":
+            synthesis_error = "empty synthesis response"
 
         if synthesis_failed:
-            fallback_response = self._build_diagnostic_fallback(
-                normalized_prompt,
-                step_summaries,
-                evaluation,
+            yield RuntimeStreamItem(
+                kind="info",
+                message=self._encode_agent_info(
+                    phase="synthesis_failed",
+                    payload={
+                        "error": synthesis_error[:220],
+                    },
+                ),
             )
+
+            # Attempt a shorter direct-generation path before exposing diagnostic fallback.
+            try:
+                rescue_chunks: list[str] = []
+                async for chunk in self._run_prompt_with_timeout(
+                    normalized_prompt,
+                    metadata_map,
+                    timeout_seconds=self._agent_rescue_timeout_seconds,
+                ):
+                    if not chunk:
+                        continue
+                    rescue_chunks.append(chunk)
+
+                rescued_response = "".join(rescue_chunks).strip()
+                if rescued_response:
+                    final_response = rescued_response
+                    for chunk in self._chunk_text(rescued_response):
+                        yield RuntimeStreamItem(kind="token", token=chunk)
+                    synthesis_failed = False
+            except Exception:
+                pass
+
+        if synthesis_failed:
+            fallback_response = self._build_model_unavailable_response(synthesis_error)
             final_response = fallback_response
             for chunk in self._chunk_text(fallback_response):
                 yield RuntimeStreamItem(kind="token", token=chunk)
@@ -708,10 +778,22 @@ class AgentRuntime:
     def _select_tool(self, objective: str, prompt: str) -> tuple[str, str]:
         lowered = objective.lower()
 
-        if any(
-            token in lowered
-            for token in ("memory", "history", "context", "previous", "recall", "检索", "历史", "上下文")
-        ):
+        retrieval_intents = (
+            "memory",
+            "context",
+            "previous",
+            "recall",
+            "conversation history",
+            "chat history",
+            "检索",
+            "上下文",
+            "前文",
+            "上文",
+            "历史记录",
+            "聊天记录",
+        )
+
+        if any(token in lowered for token in retrieval_intents):
             return ("retrieval", objective)
 
         url = self._extract_first_url(objective) or self._extract_first_url(prompt)
@@ -1098,6 +1180,14 @@ class AgentRuntime:
 
         return "\n".join(lines)
 
+    def _build_model_unavailable_response(self, error_message: str) -> str:
+        if self._contains_chinese(error_message):
+            return "模型服务暂时不可用，请稍后重试。"
+        return "Model service is temporarily unavailable. Please retry shortly."
+
+    def _contains_chinese(self, text: str) -> bool:
+        return bool(re.search(r"[\u4e00-\u9fff]", text))
+
     async def _run_mock(self, prompt: str) -> AsyncIterator[str]:
         # Mock 模式按词流式输出，便于联调与集成测试。
         response = self._build_response(prompt)
@@ -1133,6 +1223,41 @@ class AgentRuntime:
 
             for chunk in self._chunk_text(response_text):
                 yield chunk
+
+    async def _run_prompt_with_timeout(
+        self,
+        prompt: str,
+        metadata: dict[str, str] | None,
+        timeout_seconds: float,
+    ) -> AsyncIterator[str]:
+        if self.model_provider == "mock":
+            async for token in self.run_prompt(prompt, metadata):
+                yield token
+            return
+
+        first_token_timeout = max(6.0, timeout_seconds)
+        idle_timeout = min(15.0, max(6.0, timeout_seconds * 0.5))
+        iterator = self.run_prompt(prompt, metadata).__aiter__()
+        got_any_chunk = False
+        current_timeout = first_token_timeout
+
+        while True:
+            try:
+                chunk = await asyncio.wait_for(iterator.__anext__(), timeout=current_timeout)
+            except StopAsyncIteration:
+                return
+            except TimeoutError as exc:
+                if got_any_chunk:
+                    raise TimeoutError(
+                        f"model stream stalled for {idle_timeout:.1f}s"
+                    ) from exc
+                raise TimeoutError(
+                    f"model first token timeout after {first_token_timeout:.1f}s"
+                ) from exc
+
+            got_any_chunk = True
+            current_timeout = idle_timeout
+            yield chunk
 
     async def _request_openai_stream_async(
         self, prompt: str, metadata: dict[str, str] | None = None

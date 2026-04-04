@@ -78,6 +78,7 @@ const (
 	// 会话上下文仅保留最近若干轮，避免 prompt 无界增长。
 	conversationContextTurnLimit = 8
 	conversationEventLoadLimit   = 8000
+	conversationTurnMaxChars     = 1200
 
 	metadataConversationIDKey         = "conversation_id"
 	metadataUserMessageKey            = "user_message"
@@ -765,14 +766,17 @@ func (h *Handler) loadConversationTurns(userID string, conversationID string, li
 			return nil, err
 		}
 		assistantMessage = strings.TrimSpace(assistantMessage)
+		if !isEligibleConversationAssistantMessage(assistantMessage) {
+			continue
+		}
 
 		if userMessage == "" || assistantMessage == "" {
 			continue
 		}
 
 		turns = append(turns, conversationTurn{
-			User:      userMessage,
-			Assistant: assistantMessage,
+			User:      truncateForConversationContext(userMessage, conversationTurnMaxChars),
+			Assistant: truncateForConversationContext(assistantMessage, conversationTurnMaxChars),
 		})
 	}
 
@@ -834,7 +838,7 @@ func buildConversationModelPrompt(history []conversationTurn, currentUserMessage
 	}
 
 	builder.WriteString("User: ")
-	builder.WriteString(strings.TrimSpace(currentUserMessage))
+	builder.WriteString(truncateForConversationContext(strings.TrimSpace(currentUserMessage), conversationTurnMaxChars))
 	builder.WriteString("\nAssistant:")
 
 	return builder.String()
@@ -861,7 +865,7 @@ func buildConversationModelMessagesJSON(history []conversationTurn, currentUserM
 
 	messages = append(messages, openAIMessage{
 		Role:    "user",
-		Content: strings.TrimSpace(currentUserMessage),
+		Content: truncateForConversationContext(strings.TrimSpace(currentUserMessage), conversationTurnMaxChars),
 	})
 
 	encoded, err := json.Marshal(messages)
@@ -870,6 +874,44 @@ func buildConversationModelMessagesJSON(history []conversationTurn, currentUserM
 	}
 
 	return string(encoded), nil
+}
+
+func truncateForConversationContext(message string, maxChars int) string {
+	trimmed := strings.TrimSpace(message)
+	if trimmed == "" || maxChars <= 0 {
+		return ""
+	}
+
+	runes := []rune(trimmed)
+	if len(runes) <= maxChars {
+		return trimmed
+	}
+
+	return strings.TrimSpace(string(runes[:maxChars]))
+}
+
+func isEligibleConversationAssistantMessage(message string) bool {
+	normalized := strings.TrimSpace(message)
+	if normalized == "" {
+		return false
+	}
+
+	lower := strings.ToLower(normalized)
+	blockedMarkers := []string{
+		"task execution summary (fallback)",
+		"model service is temporarily unavailable",
+		"模型服务暂时不可用",
+		"rpc error",
+		"context deadline exceeded",
+	}
+
+	for _, marker := range blockedMarkers {
+		if strings.Contains(lower, marker) {
+			return false
+		}
+	}
+
+	return true
 }
 
 // parseLastEventID 解析并校验 SSE 续传游标。

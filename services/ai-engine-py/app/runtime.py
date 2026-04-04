@@ -31,6 +31,7 @@ METADATA_MEMORY_WRITE_ENABLED_KEY = "memory_write_enabled"
 METADATA_AGENT_RESUME_STEP_KEY = "agent_resume_step_index"
 METADATA_AGENT_REQUIRED_TOOL_KEY = "agent_required_tool"
 METADATA_AGENT_RESUME_REQUESTED_BY_KEY = "agent_resume_requested_by"
+METADATA_CLIENT_USER_MESSAGE_KEY = "user_message"
 
 
 @dataclass(frozen=True)
@@ -352,6 +353,7 @@ class AgentRuntime:
             resume_step_index = 1
 
         short_context = self._extract_short_context(metadata_map)
+        context_url = self._extract_latest_context_url(normalized_prompt, metadata_map)
         recalled_memories = self._agent_memory_store.recall(
             normalized_user_id, normalized_prompt, self._agent_memory_recall_limit
         )
@@ -385,6 +387,7 @@ class AgentRuntime:
         tool_success_count = 0
         blocked_actions = 0
         step_summaries: list[str] = []
+        successful_tool_observations: list[tuple[str, str]] = []
 
         if resume_step_index > 1:
             yield RuntimeStreamItem(
@@ -412,7 +415,11 @@ class AgentRuntime:
                 ),
             )
 
-            tool_name, tool_input = self._select_tool(step.objective, normalized_prompt)
+            tool_name, tool_input = self._select_tool(
+                step.objective,
+                normalized_prompt,
+                context_url=context_url,
+            )
             if tool_name != "none":
                 yield RuntimeStreamItem(
                     kind="info",
@@ -511,6 +518,7 @@ class AgentRuntime:
                 if result.ok:
                     completed_steps += 1
                     tool_success_count += 1
+                    successful_tool_observations.append((tool_name, result.output))
                 observation = result.output
 
             yield RuntimeStreamItem(
@@ -631,6 +639,18 @@ class AgentRuntime:
                     synthesis_failed = False
             except Exception:
                 pass
+
+        if synthesis_failed:
+            fallback_from_tools = self._build_tool_observation_fallback(
+                prompt=normalized_prompt,
+                tool_observations=successful_tool_observations,
+                synthesis_error=synthesis_error,
+            )
+            if fallback_from_tools:
+                final_response = fallback_from_tools
+                for chunk in self._chunk_text(fallback_from_tools):
+                    yield RuntimeStreamItem(kind="token", token=chunk)
+                synthesis_failed = False
 
         if synthesis_failed:
             fallback_response = self._build_model_unavailable_response(synthesis_error)
@@ -775,7 +795,12 @@ class AgentRuntime:
             for index, objective in enumerate(deduplicated)
         ]
 
-    def _select_tool(self, objective: str, prompt: str) -> tuple[str, str]:
+    def _select_tool(
+        self,
+        objective: str,
+        prompt: str,
+        context_url: str = "",
+    ) -> tuple[str, str]:
         lowered = objective.lower()
 
         retrieval_intents = (
@@ -814,14 +839,71 @@ class AgentRuntime:
         if any(token in lowered for token in ("search", "lookup", "retrieve", "查询", "搜", "检索")):
             return ("retrieval", objective)
 
+        if context_url and self._is_web_followup_intent(objective):
+            normalized_url = context_url.lower()
+            if "api" in lowered or "/api/" in normalized_url or normalized_url.endswith(".json"):
+                return ("http_api", context_url)
+            return ("browser_fetch", context_url)
+
         return ("none", "")
 
     def _extract_first_url(self, text: str) -> str:
-        match = re.search(r"https?://[^\s\]\[\)\(<>]+", text)
+        match = re.search(r"https?://[A-Za-z0-9\-._~:/?#\[\]@!$&'()*+,;=%]+", text)
         if not match:
             return ""
 
-        return match.group(0)
+        return match.group(0).rstrip(".,;:!?\"'，。；：！？、）】》")
+
+    def _extract_latest_context_url(self, prompt: str, metadata: dict[str, str]) -> str:
+        prompt_url = self._extract_first_url(prompt)
+        if prompt_url:
+            return prompt_url
+
+        raw_messages = metadata.get(MODEL_MESSAGES_METADATA_KEY, "").strip()
+        if raw_messages:
+            try:
+                parsed = json.loads(raw_messages)
+            except json.JSONDecodeError:
+                parsed = []
+
+            if isinstance(parsed, list):
+                for item in reversed(parsed):
+                    if not isinstance(item, dict):
+                        continue
+                    content = item.get("content")
+                    if not isinstance(content, str):
+                        continue
+                    matched_url = self._extract_first_url(content)
+                    if matched_url:
+                        return matched_url
+
+        return self._extract_first_url(metadata.get(METADATA_CLIENT_USER_MESSAGE_KEY, ""))
+
+    def _is_web_followup_intent(self, objective: str) -> bool:
+        lowered = objective.lower()
+        followup_tokens = (
+            "网页",
+            "页面",
+            "网站",
+            "链接",
+            "网址",
+            "论文",
+            "内容",
+            "详情",
+            "总结",
+            "讲了什么",
+            "web page",
+            "website",
+            "page",
+            "link",
+            "url",
+            "paper",
+            "content",
+            "details",
+            "summary",
+            "what does it say",
+        )
+        return any(token in lowered for token in followup_tokens)
 
     def _extract_math_expression(self, text: str) -> str:
         candidates = re.findall(r"[0-9\s\+\-\*\/%\(\)\.]{3,}", text)
@@ -902,7 +984,7 @@ class AgentRuntime:
         parse_json: bool,
     ) -> ToolResult:
         tool_name = "http_api" if parse_json else "browser_fetch"
-        normalized_url = url.strip()
+        normalized_url = self._normalize_tool_url(url)
         if not normalized_url:
             return ToolResult(ok=False, output=f"{tool_name} failed: URL is required")
 
@@ -926,23 +1008,181 @@ class AgentRuntime:
             method="GET",
         )
 
-        try:
-            with urllib_request.urlopen(request, timeout=self._agent_tool_http_timeout_seconds) as response:
-                raw = response.read(8192).decode("utf-8", errors="ignore")
-        except Exception as exc:
-            return ToolResult(ok=False, output=f"{tool_name} failed: {exc}")
+        raw = ""
+        attempts = 2
+        for attempt in range(1, attempts + 1):
+            try:
+                with urllib_request.urlopen(request, timeout=self._agent_tool_http_timeout_seconds) as response:
+                    raw = response.read(65536).decode("utf-8", errors="ignore")
+                break
+            except urllib_error.URLError as exc:
+                if attempt >= attempts:
+                    return ToolResult(ok=False, output=f"{tool_name} failed: {exc}")
+                time.sleep(0.35 * attempt)
+            except Exception as exc:
+                if attempt >= attempts:
+                    return ToolResult(ok=False, output=f"{tool_name} failed: {exc}")
+                time.sleep(0.35 * attempt)
 
         if parse_json:
             try:
                 parsed_json = json.loads(raw)
                 compact = json.dumps(parsed_json, ensure_ascii=True)
-                return ToolResult(ok=True, output=f"{tool_name} response: {compact[:1200]}")
+                return ToolResult(ok=True, output=f"{tool_name} response: {compact[:2400]}")
             except json.JSONDecodeError:
-                return ToolResult(ok=True, output=f"{tool_name} response: {raw[:1200]}")
+                return ToolResult(ok=True, output=f"{tool_name} response: {raw[:2400]}")
 
         stripped = re.sub(r"<[^>]+>", " ", raw)
         compact = " ".join(stripped.split())
-        return ToolResult(ok=True, output=f"{tool_name} response: {compact[:1200]}")
+        return ToolResult(ok=True, output=f"{tool_name} response: {compact[:2400]}")
+
+    def _normalize_tool_url(self, text: str) -> str:
+        candidate = self._extract_first_url(text)
+        if not candidate:
+            candidate = text.strip()
+
+        candidate = candidate.strip().strip('"\'<>')
+        candidate = candidate.rstrip(".,;:!?，。；：！？、）】》")
+        return candidate
+
+    def _build_tool_observation_fallback(
+        self,
+        prompt: str,
+        tool_observations: list[tuple[str, str]],
+        synthesis_error: str,
+    ) -> str:
+        if not tool_observations:
+            return ""
+
+        for tool_name, raw_output in reversed(tool_observations):
+            if tool_name not in {"browser_fetch", "http_api"}:
+                continue
+
+            payload = self._extract_tool_payload(raw_output, tool_name)
+            points = self._summarize_fallback_points(payload)
+            if not points:
+                continue
+
+            use_chinese = self._contains_chinese(prompt)
+            quota_limited = self._is_quota_error(synthesis_error)
+            if use_chinese:
+                if quota_limited:
+                    header = "网页已成功抓取，但模型服务触发配额或限流。先给你基于抓取结果的摘要："
+                else:
+                    header = "网页已成功抓取，但模型服务暂时不可用。先给你基于抓取结果的摘要："
+            else:
+                if quota_limited:
+                    header = "Page fetch succeeded, but model provider quota/rate limit was hit. Here is a direct summary from fetched content:"
+                else:
+                    header = "Page fetch succeeded, but model service is temporarily unavailable. Here is a direct summary from fetched content:"
+
+            lines = [header]
+            for point in points[:4]:
+                lines.append(f"- {point}")
+            return "\n".join(lines)
+
+        return ""
+
+    def _extract_tool_payload(self, tool_output: str, tool_name: str) -> str:
+        normalized = " ".join(tool_output.strip().split())
+        if not normalized:
+            return ""
+
+        prefix = f"{tool_name} response:"
+        lowered = normalized.lower()
+        if lowered.startswith(prefix):
+            return normalized[len(prefix) :].strip()
+        return normalized
+
+    def _summarize_fallback_points(self, payload: str) -> list[str]:
+        normalized = " ".join(payload.strip().split())
+        if not normalized:
+            return []
+
+        collected: list[str] = []
+        seen: set[str] = set()
+
+        def append_point(value: str) -> None:
+            candidate = " ".join(value.strip().split())
+            if len(candidate) < 8:
+                return
+            lowered = candidate.lower()
+            if lowered in seen:
+                return
+            seen.add(lowered)
+            collected.append(candidate[:180])
+
+        if normalized.startswith("{") or normalized.startswith("["):
+            try:
+                parsed = json.loads(normalized)
+            except json.JSONDecodeError:
+                parsed = None
+
+            if parsed is not None:
+                for entry in self._extract_priority_json_values(parsed):
+                    append_point(entry)
+                    if len(collected) >= 4:
+                        return collected
+
+        for segment in re.split(r"[。！？.!?;；]+", normalized):
+            append_point(segment)
+            if len(collected) >= 4:
+                return collected
+
+        if not collected:
+            append_point(normalized)
+
+        return collected
+
+    def _extract_priority_json_values(self, payload: Any) -> list[str]:
+        priority_keys = (
+            "title",
+            "name",
+            "headline",
+            "description",
+            "summary",
+            "abstract",
+            "keywords",
+            "author",
+        )
+
+        values: list[str] = []
+
+        def push(text: str) -> None:
+            candidate = " ".join(text.strip().split())
+            if not candidate:
+                return
+            values.append(candidate[:220])
+
+        def walk(node: Any, depth: int) -> None:
+            if depth > 4 or len(values) >= 12:
+                return
+
+            if isinstance(node, dict):
+                for key in priority_keys:
+                    if key not in node:
+                        continue
+
+                    value = node[key]
+                    if isinstance(value, str):
+                        push(f"{key}: {value}")
+                    elif isinstance(value, (int, float)):
+                        push(f"{key}: {value}")
+                    elif isinstance(value, dict):
+                        nested_name = value.get("name")
+                        if isinstance(nested_name, str):
+                            push(f"{key}: {nested_name}")
+
+                for value in node.values():
+                    walk(value, depth + 1)
+                return
+
+            if isinstance(node, list):
+                for item in node[:8]:
+                    walk(item, depth + 1)
+
+        walk(payload, 0)
+        return values
 
     def _is_host_allowed(self, host: str) -> bool:
         if not host:
@@ -1182,8 +1422,23 @@ class AgentRuntime:
 
     def _build_model_unavailable_response(self, error_message: str) -> str:
         if self._contains_chinese(error_message):
+            if self._is_quota_error(error_message):
+                return "模型服务触发配额或限流，请稍后重试。"
             return "模型服务暂时不可用，请稍后重试。"
+        if self._is_quota_error(error_message):
+            return "Model provider quota or rate limit reached. Please retry later."
         return "Model service is temporarily unavailable. Please retry shortly."
+
+    def _is_quota_error(self, error_message: str) -> bool:
+        lowered = error_message.lower()
+        quota_tokens = (
+            "http 429",
+            "quota",
+            "rate limit",
+            "resource_exhausted",
+            "exceeded your current quota",
+        )
+        return any(token in lowered for token in quota_tokens)
 
     def _contains_chinese(self, text: str) -> bool:
         return bool(re.search(r"[\u4e00-\u9fff]", text))

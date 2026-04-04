@@ -175,3 +175,91 @@ func TestProcessWithRetryUnavailableErrorRetriesAndCompletes(t *testing.T) {
 		t.Fatalf("expected retry_attempt marker event, got %#v", events)
 	}
 }
+
+func TestProcessTaskKeepsRawPromptWhenAgentEnabled(t *testing.T) {
+	taskStore := store.NewInMemory()
+	taskID := "task-agent-enabled-raw-prompt"
+	rawPrompt := "请继续总结网页内容"
+	wrappedPrompt := "Conversation history: ..."
+	now := time.Now().UTC()
+
+	if err := taskStore.Create(domain.Task{
+		ID:     taskID,
+		UserID: "worker-test-user",
+		Prompt: rawPrompt,
+		Status: domain.TaskQueued,
+		Metadata: map[string]string{
+			metadataAgentEnabledKey: "true",
+			metadataModelPromptKey:  wrappedPrompt,
+		},
+		CreatedAt: now,
+		UpdatedAt: now,
+	}); err != nil {
+		t.Fatalf("Create returned error: %v", err)
+	}
+
+	receivedPrompt := ""
+	agentClient := &fakeAgentClient{
+		submitTask: func(ctx context.Context, task domain.Task) (agentv1.AgentRuntime_SubmitTaskClient, error) {
+			receivedPrompt = task.Prompt
+			emittedAt := time.Now().UTC().UnixMilli()
+			return newScriptedSubmitTaskStream(ctx, []*agentv1.AgentEvent{
+				{Type: agentv1.AgentEventType_AGENT_EVENT_TYPE_STARTED, Message: "task started", EmittedAtUnixMs: emittedAt},
+				{Type: agentv1.AgentEventType_AGENT_EVENT_TYPE_COMPLETED, Message: "task completed", EmittedAtUnixMs: emittedAt + 1},
+			}), nil
+		},
+	}
+
+	processor := NewTaskProcessor(taskStore, queue.NewInMemoryQueue(4), agentClient, ProcessorOptions{ExecutionTimeout: 2 * time.Second})
+	if err := processor.processTask(context.Background(), taskID); err != nil {
+		t.Fatalf("processTask returned error: %v", err)
+	}
+
+	if receivedPrompt != rawPrompt {
+		t.Fatalf("unexpected prompt submitted to agent: got %q want %q", receivedPrompt, rawPrompt)
+	}
+}
+
+func TestProcessTaskUsesModelPromptWhenAgentDisabled(t *testing.T) {
+	taskStore := store.NewInMemory()
+	taskID := "task-agent-disabled-model-prompt"
+	rawPrompt := "原始用户问题"
+	wrappedPrompt := "Conversation history: User: ... Assistant: ..."
+	now := time.Now().UTC()
+
+	if err := taskStore.Create(domain.Task{
+		ID:     taskID,
+		UserID: "worker-test-user",
+		Prompt: rawPrompt,
+		Status: domain.TaskQueued,
+		Metadata: map[string]string{
+			metadataAgentEnabledKey: "false",
+			metadataModelPromptKey:  wrappedPrompt,
+		},
+		CreatedAt: now,
+		UpdatedAt: now,
+	}); err != nil {
+		t.Fatalf("Create returned error: %v", err)
+	}
+
+	receivedPrompt := ""
+	agentClient := &fakeAgentClient{
+		submitTask: func(ctx context.Context, task domain.Task) (agentv1.AgentRuntime_SubmitTaskClient, error) {
+			receivedPrompt = task.Prompt
+			emittedAt := time.Now().UTC().UnixMilli()
+			return newScriptedSubmitTaskStream(ctx, []*agentv1.AgentEvent{
+				{Type: agentv1.AgentEventType_AGENT_EVENT_TYPE_STARTED, Message: "task started", EmittedAtUnixMs: emittedAt},
+				{Type: agentv1.AgentEventType_AGENT_EVENT_TYPE_COMPLETED, Message: "task completed", EmittedAtUnixMs: emittedAt + 1},
+			}), nil
+		},
+	}
+
+	processor := NewTaskProcessor(taskStore, queue.NewInMemoryQueue(4), agentClient, ProcessorOptions{ExecutionTimeout: 2 * time.Second})
+	if err := processor.processTask(context.Background(), taskID); err != nil {
+		t.Fatalf("processTask returned error: %v", err)
+	}
+
+	if receivedPrompt != wrappedPrompt {
+		t.Fatalf("unexpected prompt submitted to agent: got %q want %q", receivedPrompt, wrappedPrompt)
+	}
+}

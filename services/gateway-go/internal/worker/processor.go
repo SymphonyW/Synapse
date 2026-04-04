@@ -24,6 +24,7 @@ import (
 var ErrTaskCanceled = errors.New("task canceled")
 
 const metadataModelPromptKey = "model_prompt"
+const metadataAgentEnabledKey = "agent_enabled"
 const metadataApprovalGrantedKey = "approval_granted"
 const metadataAgentResumeStepKey = "agent_resume_step_index"
 const metadataAgentRequiredToolKey = "agent_required_tool"
@@ -172,8 +173,11 @@ func (p *TaskProcessor) processTask(parentCtx context.Context, taskID string) er
 	}()
 
 	submissionTask := task
-	if modelPrompt := strings.TrimSpace(task.Metadata[metadataModelPromptKey]); modelPrompt != "" {
-		submissionTask.Prompt = modelPrompt
+	agentEnabled := readMetadataBool(task.Metadata[metadataAgentEnabledKey], true)
+	if !agentEnabled {
+		if modelPrompt := strings.TrimSpace(task.Metadata[metadataModelPromptKey]); modelPrompt != "" {
+			submissionTask.Prompt = modelPrompt
+		}
 	}
 
 	stream, err := p.agent.SubmitTask(execCtx, submissionTask)
@@ -442,4 +446,16 @@ func normalizeEventType(raw string) string {
 		return "unspecified"
 	}
 	return strings.ToLower(value)
+}
+
+func readMetadataBool(value string, defaultValue bool) bool {
+	normalized := strings.ToLower(strings.TrimSpace(value))
+	switch normalized {
+	case "1", "true", "yes", "on", "y":
+		return true
+	case "0", "false", "no", "off", "n":
+		return false
+	default:
+		return defaultValue
+	}
 }

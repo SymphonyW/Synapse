@@ -17,6 +17,8 @@ class BenchmarkCase:
     metadata: dict[str, str]
     min_success: float
     expect_pause: bool
+    required_events: tuple[str, ...]
+    required_tools: tuple[str, ...]
 
 
 @dataclass(frozen=True)
@@ -28,6 +30,8 @@ class BenchmarkResult:
     tool_success_rate: float
     blocked_actions: int
     duration_ms: int
+    missing_events: tuple[str, ...]
+    missing_tools: tuple[str, ...]
 
 
 def _read_float_env(name: str, default_value: float) -> float:
@@ -66,6 +70,8 @@ def _load_cases(file_path: pathlib.Path) -> list[BenchmarkCase]:
 
         min_success = float(item.get("min_success", 0.6) or 0.6)
         expect_pause = bool(item.get("expect_pause", False))
+        required_events = _read_string_tuple(item.get("required_events", []))
+        required_tools = _read_string_tuple(item.get("required_tools", []))
 
         cases.append(
             BenchmarkCase(
@@ -74,10 +80,27 @@ def _load_cases(file_path: pathlib.Path) -> list[BenchmarkCase]:
                 metadata=metadata,
                 min_success=min_success,
                 expect_pause=expect_pause,
+                required_events=required_events,
+                required_tools=required_tools,
             )
         )
 
     return cases
+
+
+def _read_string_tuple(raw: Any) -> tuple[str, ...]:
+    if not isinstance(raw, list):
+        return ()
+
+    values: list[str] = []
+    for item in raw:
+        if not isinstance(item, str):
+            continue
+        normalized = item.strip()
+        if normalized:
+            values.append(normalized)
+
+    return tuple(values)
 
 
 def _parse_agent_info(message: str) -> tuple[str, dict[str, Any]]:
@@ -106,6 +129,8 @@ async def _run_case(runtime: AgentRuntime, case: BenchmarkCase, task_index: int)
     estimated_success = 0.0
     tool_success_rate = 0.0
     blocked_actions = 0
+    seen_events: set[str] = set()
+    seen_tools: set[str] = set()
 
     async for event in runtime.run_task(
         task_id=f"benchmark-{task_index}-{case.case_id}",
@@ -121,6 +146,13 @@ async def _run_case(runtime: AgentRuntime, case: BenchmarkCase, task_index: int)
             continue
 
         phase, payload = _parse_agent_info(event.message)
+        if phase:
+            seen_events.add(phase)
+
+        raw_tool = payload.get("tool")
+        if isinstance(raw_tool, str) and raw_tool.strip():
+            seen_tools.add(raw_tool.strip())
+
         if phase == "approval_required":
             paused = True
 
@@ -136,6 +168,10 @@ async def _run_case(runtime: AgentRuntime, case: BenchmarkCase, task_index: int)
     else:
         passed = (not paused) and estimated_success >= case.min_success
 
+    missing_events = tuple(item for item in case.required_events if item not in seen_events)
+    missing_tools = tuple(item for item in case.required_tools if item not in seen_tools)
+    passed = passed and not missing_events and not missing_tools
+
     return BenchmarkResult(
         case_id=case.case_id,
         passed=passed,
@@ -144,6 +180,8 @@ async def _run_case(runtime: AgentRuntime, case: BenchmarkCase, task_index: int)
         tool_success_rate=tool_success_rate,
         blocked_actions=blocked_actions,
         duration_ms=duration_ms,
+        missing_events=missing_events,
+        missing_tools=missing_tools,
     )
 
 
@@ -201,6 +239,8 @@ async def _run_all(cases: list[BenchmarkCase]) -> dict[str, Any]:
                 "tool_success_rate": round(item.tool_success_rate, 4),
                 "blocked_actions": item.blocked_actions,
                 "duration_ms": item.duration_ms,
+                "missing_events": list(item.missing_events),
+                "missing_tools": list(item.missing_tools),
             }
             for item in results
         ],

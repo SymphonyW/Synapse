@@ -57,6 +57,41 @@ class AgentEvaluation:
     blocked_actions: int
 
 
+@dataclass(frozen=True)
+class PlannerDecision:
+    step_index: int
+    objective: str
+    tool_name: str
+    tool_input: str
+    planner: str
+    reason: str = ""
+
+    @property
+    def uses_tool(self) -> bool:
+        return self.tool_name != "none"
+
+
+@dataclass(frozen=True)
+class ToolExecutionOutcome:
+    status: str
+    observation: str
+    result: ToolResult | None = None
+    duration_ms: int = 0
+    reason: str = ""
+    completed: bool = False
+    blocked: bool = False
+    tool_called: bool = False
+    tool_succeeded: bool = False
+    should_pause: bool = False
+
+
+@dataclass(frozen=True)
+class ReplanDecision:
+    should_replan: bool
+    reason: str = ""
+    decision: PlannerDecision | None = None
+
+
 class AgentMemoryStore:
     """按用户 ID 分组的简单文件型长期记忆存储。"""
 
@@ -395,6 +430,18 @@ class AgentRuntime:
         blocked_actions = 0
         step_summaries: list[str] = []
         successful_tool_observations: list[tuple[str, str]] = []
+        replan_used = False
+
+        def record_outcome(outcome: ToolExecutionOutcome) -> None:
+            nonlocal completed_steps, tool_call_count, tool_success_count, blocked_actions
+            if outcome.completed:
+                completed_steps += 1
+            if outcome.blocked:
+                blocked_actions += 1
+            if outcome.tool_called:
+                tool_call_count += 1
+            if outcome.tool_succeeded:
+                tool_success_count += 1
 
         if resume_step_index > 1:
             yield RuntimeStreamItem(
@@ -407,6 +454,9 @@ class AgentRuntime:
                 ),
             )
 
+        # 主循环显式分为 planner -> executor -> observer -> replanner。
+        # mock provider 使用确定性 planner；openai provider 先预留模型选工具入口，
+        # 当前仍会回退到同一套确定性策略，避免改变线上行为。
         for step in plan_steps:
             if step.index < resume_step_index:
                 continue
@@ -422,224 +472,47 @@ class AgentRuntime:
                 ),
             )
 
-            tool_name, tool_input = self._select_tool(
-                step.objective,
-                normalized_prompt,
+            decision = self._planner_select_tool(
+                step=step,
+                prompt=normalized_prompt,
                 context_url=context_url,
+                metadata=metadata_map,
             )
-            if tool_name != "none":
-                yield RuntimeStreamItem(
-                    kind="info",
-                    message=self._encode_agent_info(
-                        phase="tool_selected",
-                        payload=self._build_tool_event_payload(
-                            step_index=step.index,
-                            objective=step.objective,
-                            tool_name=tool_name,
-                            tool_input=tool_input,
-                        ),
-                        display_message=f"Tool selected: {tool_name}",
-                    ),
-                )
-                yield RuntimeStreamItem(
-                    kind="info",
-                    message=self._encode_agent_info(
-                        phase="decide",
-                        payload={
-                            "step_index": step.index,
-                            "tool": tool_name,
-                            "tool_input": tool_input,
-                        },
-                    ),
-                )
+            for planner_event in self._planner_decision_events(decision):
+                yield planner_event
 
-            if tool_name == "none":
-                observation = "no external tool required"
-                completed_steps += 1
-                yield RuntimeStreamItem(
-                    kind="info",
-                    message=self._encode_agent_info(
-                        phase="tool_skipped",
-                        payload=self._build_tool_event_payload(
-                            step_index=step.index,
-                            objective=step.objective,
-                            tool_name=tool_name,
-                            tool_input=tool_input,
-                            reason="no_tool_selected",
-                        ),
-                        display_message="Tool skipped: no external tool required",
-                    ),
-                )
-            elif not self._is_tool_allowed_for_role(tool_name, actor_role):
-                blocked_actions += 1
-                observation = f"tool {tool_name} is blocked for role {actor_role}"
-                self._tool_audit.log(
-                    task_id=task_id,
-                    user_id=normalized_user_id,
-                    user_role=actor_role,
-                    tool_name=tool_name,
-                    tool_input=tool_input,
-                    outcome=observation,
-                    ok=False,
-                    duration_ms=0,
-                    reason="policy_blocked",
-                )
-                yield RuntimeStreamItem(
-                    kind="info",
-                    message=self._encode_agent_info(
-                        phase="policy_blocked",
-                        payload={
-                            "step_index": step.index,
-                            "tool": tool_name,
-                            "role": actor_role,
-                        },
-                    ),
-                )
-                yield RuntimeStreamItem(
-                    kind="info",
-                    message=self._encode_agent_info(
-                        phase="tool_skipped",
-                        payload=self._build_tool_event_payload(
-                            step_index=step.index,
-                            objective=step.objective,
-                            tool_name=tool_name,
-                            tool_input=tool_input,
-                            reason="policy_blocked",
-                            extra={"role": actor_role},
-                        ),
-                        display_message=f"Tool skipped: {tool_name} blocked for role {actor_role}",
-                    ),
-                )
-            elif self._tool_requires_approval(tool_name) and not (
-                approval_granted or tool_name in approved_tools
+            outcome_box: dict[str, ToolExecutionOutcome] = {}
+            async for executor_event in self._executor_run_decision_events(
+                decision=decision,
+                task_id=task_id,
+                user_id=normalized_user_id,
+                user_role=actor_role,
+                prompt=normalized_prompt,
+                metadata=metadata_map,
+                recalled_memories=recalled_memories,
+                approval_granted=approval_granted,
+                approved_tools=approved_tools,
+                outcome_box=outcome_box,
             ):
-                blocked_actions += 1
-                observation = f"tool {tool_name} requires explicit approval"
-                self._tool_audit.log(
-                    task_id=task_id,
-                    user_id=normalized_user_id,
-                    user_role=actor_role,
-                    tool_name=tool_name,
-                    tool_input=tool_input,
-                    outcome=observation,
-                    ok=False,
-                    duration_ms=0,
-                    reason="approval_required",
-                )
-                pause_payload = {
-                    "step_index": step.index,
-                    "tool": tool_name,
-                    "tool_input": tool_input,
-                    "resume_step_index": step.index,
-                    "reason": "approval_required",
-                    "hint": "call task approve endpoint to resume execution",
-                }
-                pause_payload.update(
-                    self._build_tool_event_payload(
-                        step_index=step.index,
-                        objective=step.objective,
-                        tool_name=tool_name,
-                        tool_input=tool_input,
-                        reason="approval_required",
-                    )
-                )
-                yield RuntimeStreamItem(
-                    kind="info",
-                    message=self._encode_agent_info(
-                        phase="approval_required",
-                        payload=pause_payload,
-                        display_message=f"Approval required for tool: {tool_name}",
-                    ),
-                )
-                yield RuntimeStreamItem(
-                    kind="pause",
-                    message=self._encode_agent_info(
-                        phase="paused",
-                        payload={
-                            "reason": observation,
-                            "tool": tool_name,
-                            "resume_step_index": step.index,
-                        },
-                    ),
-                )
+                yield executor_event
+
+            outcome = outcome_box["outcome"]
+            if outcome.should_pause:
                 return
-            else:
-                tool_call_count += 1
-                yield RuntimeStreamItem(
-                    kind="info",
-                    message=self._encode_agent_info(
-                        phase="tool_started",
-                        payload=self._build_tool_event_payload(
-                            step_index=step.index,
-                            objective=step.objective,
-                            tool_name=tool_name,
-                            tool_input=tool_input,
-                        ),
-                        display_message=f"Tool started: {tool_name}",
-                    ),
-                )
-                tool_started_at = time.time()
-                result = await asyncio.to_thread(
-                    self._execute_tool,
-                    task_id,
-                    normalized_user_id,
-                    actor_role,
-                    tool_name,
-                    tool_input,
-                    normalized_prompt,
-                    metadata_map,
-                    recalled_memories,
-                )
-                tool_duration_ms = int((time.time() - tool_started_at) * 1000)
-                if result.ok:
-                    completed_steps += 1
-                    tool_success_count += 1
-                    successful_tool_observations.append((tool_name, result.output))
-                    yield RuntimeStreamItem(
-                        kind="info",
-                        message=self._encode_agent_info(
-                            phase="tool_finished",
-                            payload=self._build_tool_event_payload(
-                                step_index=step.index,
-                                objective=step.objective,
-                                tool_name=tool_name,
-                                tool_input=tool_input,
-                                result=result,
-                                duration_ms=tool_duration_ms,
-                            ),
-                            display_message=f"Tool finished: {tool_name}",
-                        ),
-                    )
-                else:
-                    yield RuntimeStreamItem(
-                        kind="info",
-                        message=self._encode_agent_info(
-                            phase="tool_failed",
-                            payload=self._build_tool_event_payload(
-                                step_index=step.index,
-                                objective=step.objective,
-                                tool_name=tool_name,
-                                tool_input=tool_input,
-                                result=result,
-                                duration_ms=tool_duration_ms,
-                            ),
-                            display_message=f"Tool failed: {tool_name}",
-                        ),
-                    )
-                observation = result.output
+
+            record_outcome(outcome)
+            if outcome.tool_succeeded and outcome.result is not None:
+                successful_tool_observations.append((decision.tool_name, outcome.result.output))
 
             yield RuntimeStreamItem(
                 kind="info",
                 message=self._encode_agent_info(
                     phase="observe",
-                    payload={
-                        "step_index": step.index,
-                        "observation": observation,
-                    },
+                    payload=self._observer_payload(decision, outcome),
                 ),
             )
 
-            reflection = self._reflect_step(step.objective, observation)
+            reflection = self._observer_reflect_decision(decision, outcome)
             step_summaries.append(reflection)
             yield RuntimeStreamItem(
                 kind="info",
@@ -648,6 +521,87 @@ class AgentRuntime:
                     payload={
                         "step_index": step.index,
                         "reflection": reflection,
+                    },
+                ),
+            )
+
+            replan = self._replanner_after_failure(
+                step=step,
+                failed_decision=decision,
+                outcome=outcome,
+                prompt=normalized_prompt,
+                context_url=context_url,
+                already_replanned=replan_used,
+            )
+            if not replan.should_replan or replan.decision is None:
+                continue
+
+            replan_used = True
+            yield RuntimeStreamItem(
+                kind="info",
+                message=self._encode_agent_info(
+                    phase="replan",
+                    payload={
+                        "step_index": step.index,
+                        "reason": replan.reason,
+                        "from_tool": decision.tool_name,
+                        "to_tool": replan.decision.tool_name,
+                        "to_tool_input": replan.decision.tool_input,
+                    },
+                    display_message=f"Replanned step {step.index}: {replan.reason}",
+                ),
+            )
+
+            for planner_event in self._planner_decision_events(replan.decision):
+                yield planner_event
+
+            replan_outcome_box: dict[str, ToolExecutionOutcome] = {}
+            async for executor_event in self._executor_run_decision_events(
+                decision=replan.decision,
+                task_id=task_id,
+                user_id=normalized_user_id,
+                user_role=actor_role,
+                prompt=normalized_prompt,
+                metadata=metadata_map,
+                recalled_memories=recalled_memories,
+                approval_granted=approval_granted,
+                approved_tools=approved_tools,
+                outcome_box=replan_outcome_box,
+            ):
+                yield executor_event
+
+            replan_outcome = replan_outcome_box["outcome"]
+            if replan_outcome.should_pause:
+                return
+
+            record_outcome(replan_outcome)
+            if replan_outcome.tool_succeeded and replan_outcome.result is not None:
+                successful_tool_observations.append(
+                    (replan.decision.tool_name, replan_outcome.result.output)
+                )
+
+            yield RuntimeStreamItem(
+                kind="info",
+                message=self._encode_agent_info(
+                    phase="observe",
+                    payload=self._observer_payload(
+                        replan.decision,
+                        replan_outcome,
+                        replanned=True,
+                    ),
+                ),
+            )
+
+            reflection = self._observer_reflect_decision(replan.decision, replan_outcome)
+            step_summaries.append(reflection)
+            yield RuntimeStreamItem(
+                kind="info",
+                message=self._encode_agent_info(
+                    phase="reflect",
+                    payload={
+                        "step_index": step.index,
+                        "reflection": reflection,
+                        "replanned": True,
                     },
                 ),
             )
@@ -930,6 +884,386 @@ class AgentRuntime:
             payload.update(extra)
 
         return payload
+
+    def _planner_select_tool(
+        self,
+        step: PlannedStep,
+        prompt: str,
+        context_url: str,
+        metadata: dict[str, str],
+    ) -> PlannerDecision:
+        # planner 负责把“下一步目标”变成可执行的工具决策。
+        # mock 下必须保持确定性；openai 下先预留模型选工具入口，再回退到确定性策略。
+        model_decision = self._planner_select_tool_with_model(
+            step=step,
+            prompt=prompt,
+            context_url=context_url,
+            metadata=metadata,
+        )
+        if model_decision is not None:
+            return model_decision
+
+        tool_name, tool_input = self._select_tool(
+            step.objective,
+            prompt,
+            context_url=context_url,
+        )
+        planner_name = "mock_deterministic" if self.model_provider == "mock" else "heuristic_fallback"
+        return PlannerDecision(
+            step_index=step.index,
+            objective=step.objective,
+            tool_name=tool_name,
+            tool_input=tool_input,
+            planner=planner_name,
+            reason="deterministic_rule_match" if tool_name != "none" else "no_matching_tool",
+        )
+
+    def _planner_select_tool_with_model(
+        self,
+        step: PlannedStep,
+        prompt: str,
+        context_url: str,
+        metadata: dict[str, str],
+    ) -> PlannerDecision | None:
+        # 预留 openai provider 的模型选工具路径。当前不在执行循环里额外发起模型请求，
+        # 避免改变延迟和费用；后续可在这里解析模型返回的结构化 ToolCall。
+        if self.model_provider != "openai":
+            return None
+
+        _ = (step, prompt, context_url, metadata)
+        return None
+
+    def _planner_decision_events(self, decision: PlannerDecision) -> tuple[RuntimeStreamItem, ...]:
+        if not decision.uses_tool:
+            return ()
+
+        return (
+            RuntimeStreamItem(
+                kind="info",
+                message=self._encode_agent_info(
+                    phase="tool_selected",
+                    payload=self._build_tool_event_payload(
+                        step_index=decision.step_index,
+                        objective=decision.objective,
+                        tool_name=decision.tool_name,
+                        tool_input=decision.tool_input,
+                        extra={
+                            "planner": decision.planner,
+                            "planner_reason": decision.reason,
+                        },
+                    ),
+                    display_message=f"Tool selected: {decision.tool_name}",
+                ),
+            ),
+            RuntimeStreamItem(
+                kind="info",
+                message=self._encode_agent_info(
+                    phase="decide",
+                    payload={
+                        "step_index": decision.step_index,
+                        "tool": decision.tool_name,
+                        "tool_input": decision.tool_input,
+                        "planner": decision.planner,
+                        "reason": decision.reason,
+                    },
+                ),
+            ),
+        )
+
+    async def _executor_run_decision_events(
+        self,
+        decision: PlannerDecision,
+        task_id: str,
+        user_id: str,
+        user_role: str,
+        prompt: str,
+        metadata: dict[str, str],
+        recalled_memories: list[dict[str, Any]],
+        approval_granted: bool,
+        approved_tools: set[str],
+        outcome_box: dict[str, ToolExecutionOutcome],
+    ) -> AsyncIterator[RuntimeStreamItem]:
+        # executor 只负责应用策略护栏并调用工具；失败会变成 outcome，
+        # 不会向外抛出导致整个 Agent 循环崩溃。
+        if not decision.uses_tool:
+            outcome = ToolExecutionOutcome(
+                status="skipped",
+                observation="no external tool required",
+                reason="no_tool_selected",
+                completed=True,
+            )
+            outcome_box["outcome"] = outcome
+            yield RuntimeStreamItem(
+                kind="info",
+                message=self._encode_agent_info(
+                    phase="tool_skipped",
+                    payload=self._build_tool_event_payload(
+                        step_index=decision.step_index,
+                        objective=decision.objective,
+                        tool_name=decision.tool_name,
+                        tool_input=decision.tool_input,
+                        reason=outcome.reason,
+                    ),
+                    display_message="Tool skipped: no external tool required",
+                ),
+            )
+            return
+
+        if not self._is_tool_allowed_for_role(decision.tool_name, user_role):
+            observation = f"tool {decision.tool_name} is blocked for role {user_role}"
+            self._tool_audit.log(
+                task_id=task_id,
+                user_id=user_id,
+                user_role=user_role,
+                tool_name=decision.tool_name,
+                tool_input=decision.tool_input,
+                outcome=observation,
+                ok=False,
+                duration_ms=0,
+                reason="policy_blocked",
+            )
+            outcome = ToolExecutionOutcome(
+                status="skipped",
+                observation=observation,
+                reason="policy_blocked",
+                blocked=True,
+            )
+            outcome_box["outcome"] = outcome
+            yield RuntimeStreamItem(
+                kind="info",
+                message=self._encode_agent_info(
+                    phase="policy_blocked",
+                    payload={
+                        "step_index": decision.step_index,
+                        "tool": decision.tool_name,
+                        "role": user_role,
+                    },
+                ),
+            )
+            yield RuntimeStreamItem(
+                kind="info",
+                message=self._encode_agent_info(
+                    phase="tool_skipped",
+                    payload=self._build_tool_event_payload(
+                        step_index=decision.step_index,
+                        objective=decision.objective,
+                        tool_name=decision.tool_name,
+                        tool_input=decision.tool_input,
+                        reason=outcome.reason,
+                        extra={"role": user_role},
+                    ),
+                    display_message=f"Tool skipped: {decision.tool_name} blocked for role {user_role}",
+                ),
+            )
+            return
+
+        if self._tool_requires_approval(decision.tool_name) and not (
+            approval_granted or decision.tool_name in approved_tools
+        ):
+            observation = f"tool {decision.tool_name} requires explicit approval"
+            self._tool_audit.log(
+                task_id=task_id,
+                user_id=user_id,
+                user_role=user_role,
+                tool_name=decision.tool_name,
+                tool_input=decision.tool_input,
+                outcome=observation,
+                ok=False,
+                duration_ms=0,
+                reason="approval_required",
+            )
+            outcome = ToolExecutionOutcome(
+                status="approval_required",
+                observation=observation,
+                reason="approval_required",
+                blocked=True,
+                should_pause=True,
+            )
+            outcome_box["outcome"] = outcome
+            pause_payload = {
+                "step_index": decision.step_index,
+                "tool": decision.tool_name,
+                "tool_input": decision.tool_input,
+                "resume_step_index": decision.step_index,
+                "reason": outcome.reason,
+                "hint": "call task approve endpoint to resume execution",
+            }
+            pause_payload.update(
+                self._build_tool_event_payload(
+                    step_index=decision.step_index,
+                    objective=decision.objective,
+                    tool_name=decision.tool_name,
+                    tool_input=decision.tool_input,
+                    reason=outcome.reason,
+                )
+            )
+            yield RuntimeStreamItem(
+                kind="info",
+                message=self._encode_agent_info(
+                    phase="approval_required",
+                    payload=pause_payload,
+                    display_message=f"Approval required for tool: {decision.tool_name}",
+                ),
+            )
+            yield RuntimeStreamItem(
+                kind="pause",
+                message=self._encode_agent_info(
+                    phase="paused",
+                    payload={
+                        "reason": observation,
+                        "tool": decision.tool_name,
+                        "resume_step_index": decision.step_index,
+                    },
+                ),
+            )
+            return
+
+        yield RuntimeStreamItem(
+            kind="info",
+            message=self._encode_agent_info(
+                phase="tool_started",
+                payload=self._build_tool_event_payload(
+                    step_index=decision.step_index,
+                    objective=decision.objective,
+                    tool_name=decision.tool_name,
+                    tool_input=decision.tool_input,
+                ),
+                display_message=f"Tool started: {decision.tool_name}",
+            ),
+        )
+
+        tool_started_at = time.time()
+        try:
+            result = await asyncio.to_thread(
+                self._execute_tool,
+                task_id,
+                user_id,
+                user_role,
+                decision.tool_name,
+                decision.tool_input,
+                prompt,
+                metadata,
+                recalled_memories,
+            )
+        except Exception as exc:
+            result = ToolResult.failure(
+                f"{decision.tool_name} failed: {exc}",
+                code="executor_exception",
+            )
+
+        tool_duration_ms = int((time.time() - tool_started_at) * 1000)
+        status = "finished" if result.ok else "failed"
+        outcome = ToolExecutionOutcome(
+            status=status,
+            observation=result.output,
+            result=result,
+            duration_ms=tool_duration_ms,
+            completed=result.ok,
+            tool_called=True,
+            tool_succeeded=result.ok,
+        )
+        outcome_box["outcome"] = outcome
+
+        phase = "tool_finished" if result.ok else "tool_failed"
+        display = "Tool finished" if result.ok else "Tool failed"
+        yield RuntimeStreamItem(
+            kind="info",
+            message=self._encode_agent_info(
+                phase=phase,
+                payload=self._build_tool_event_payload(
+                    step_index=decision.step_index,
+                    objective=decision.objective,
+                    tool_name=decision.tool_name,
+                    tool_input=decision.tool_input,
+                    result=result,
+                    duration_ms=tool_duration_ms,
+                ),
+                display_message=f"{display}: {decision.tool_name}",
+            ),
+        )
+
+    def _observer_payload(
+        self,
+        decision: PlannerDecision,
+        outcome: ToolExecutionOutcome,
+        replanned: bool = False,
+    ) -> dict[str, Any]:
+        payload: dict[str, Any] = {
+            "step_index": decision.step_index,
+            "observation": outcome.observation,
+            "tool": decision.tool_name,
+            "status": outcome.status,
+        }
+        if outcome.reason:
+            payload["reason"] = outcome.reason
+        if replanned:
+            payload["replanned"] = True
+        return payload
+
+    def _observer_reflect_decision(
+        self,
+        decision: PlannerDecision,
+        outcome: ToolExecutionOutcome,
+    ) -> str:
+        # observer 将执行结果统一转成反思文本，失败也只是普通观察结果。
+        return self._reflect_step(decision.objective, outcome.observation)
+
+    def _replanner_after_failure(
+        self,
+        step: PlannedStep,
+        failed_decision: PlannerDecision,
+        outcome: ToolExecutionOutcome,
+        prompt: str,
+        context_url: str,
+        already_replanned: bool,
+    ) -> ReplanDecision:
+        # replanner 只允许每个任务接管一次，避免失败工具反复重试形成循环。
+        if already_replanned or outcome.status != "failed":
+            return ReplanDecision(should_replan=False)
+
+        if failed_decision.tool_name == "code_exec":
+            expression = self._extract_math_expression(failed_decision.tool_input)
+            if expression:
+                return ReplanDecision(
+                    should_replan=True,
+                    reason="code_exec_failed_use_calculator",
+                    decision=PlannerDecision(
+                        step_index=step.index,
+                        objective=step.objective,
+                        tool_name="calculator",
+                        tool_input=expression,
+                        planner="replanner",
+                        reason="fallback_to_calculator",
+                    ),
+                )
+
+        if failed_decision.tool_name in {"browser_fetch", "http_api"}:
+            return ReplanDecision(
+                should_replan=True,
+                reason="network_tool_failed_use_retrieval",
+                decision=PlannerDecision(
+                    step_index=step.index,
+                    objective=step.objective,
+                    tool_name="retrieval",
+                    tool_input=step.objective,
+                    planner="replanner",
+                    reason="fallback_to_retrieval",
+                ),
+            )
+
+        _ = (prompt, context_url)
+        return ReplanDecision(
+            should_replan=True,
+            reason="tool_failed_continue_without_tool",
+            decision=PlannerDecision(
+                step_index=step.index,
+                objective=step.objective,
+                tool_name="none",
+                tool_input="",
+                planner="replanner",
+                reason="continue_without_tool",
+            ),
+        )
 
     def _build_plan_steps(self, prompt: str) -> list[PlannedStep]:
         pieces: list[str] = []

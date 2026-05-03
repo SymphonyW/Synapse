@@ -26,14 +26,30 @@
   },
   {
     "id": "http_with_approval",
-    "prompt": "visit https://example.com and summarize the page",
+    "prompt": "visit https://example.com, summarize the page, and cite the source URL",
     "metadata": {
       "agent_enabled": "true",
       "auth_user_role": "user",
       "approval_granted": "true",
-      "approved_tools": "browser_fetch"
+      "approved_tools": "summarize_page"
     },
-    "min_success": 0.55
+    "min_success": 0.55,
+    "required_events": ["tool_finished"],
+    "required_tools": ["summarize_page"],
+    "required_answer_contains": ["https://example.com"]
+  },
+  {
+    "id": "browser_search_source",
+    "prompt": "search https://example.com and cite the source URL",
+    "metadata": {
+      "agent_enabled": "true",
+      "auth_user_role": "user",
+      "approval_granted": "true"
+    },
+    "min_success": 0.7,
+    "required_events": ["tool_finished"],
+    "required_tools": ["search"],
+    "required_answer_contains": ["https://example.com"]
   },
   {
     "id": "approval_pause",
@@ -64,11 +80,11 @@
       "agent_enabled": "true",
       "auth_user_role": "user",
       "approval_granted": "true",
-      "approved_tools": "browser_fetch,retrieval"
+      "approved_tools": "summarize_page,retrieval"
     },
     "min_success": 0.7,
     "required_events": ["tool_failed", "replan", "tool_finished"],
-    "required_tools": ["browser_fetch", "retrieval"]
+    "required_tools": ["summarize_page", "retrieval"]
   },
   {
     "id": "code_exec_admin",

@@ -26,6 +26,22 @@ def _fetch_http(url: str, parse_json: bool) -> ToolResult:
     return ToolResult.success(f"{mode} response: {url}")
 
 
+def _browse_web(operation: str, call: ToolCall, context: ToolContext) -> ToolResult:
+    # 浏览工具协议测试只验证 ToolCall/ToolResult 边界，真实网络护栏由 runtime 测试和 regression 覆盖。
+    _ = context
+    if operation == "summarize_page":
+        return ToolResult.success(
+            f"summarize_page result: Source: {call.argument_text('url')}\n- deterministic summary",
+            metadata={"source_url": call.argument_text("url")},
+        )
+    if operation == "source_citation":
+        return ToolResult.success(
+            f"source_citation result: [1] {call.argument_text('url')}",
+            metadata={"source_url": call.argument_text("url")},
+        )
+    return ToolResult.success(f"{operation} result: {call.input_text}")
+
+
 def _context() -> ToolContext:
     # 共享只读上下文，覆盖身份、角色、提示词元数据和召回记忆，
     # 同时不依赖文件型记忆存储。
@@ -75,6 +91,7 @@ class ToolProtocolTests(unittest.TestCase):
             safe_eval=_safe_eval,
             fetch_http=_fetch_http,
             enable_code_execution=True,
+            browse_web=_browse_web,
         )
 
         self.assertEqual(
@@ -83,9 +100,14 @@ class ToolProtocolTests(unittest.TestCase):
                 "browser_fetch",
                 "calculator",
                 "code_exec",
+                "extract_text",
                 "http_api",
                 "json_echo",
+                "open_url",
                 "retrieval",
+                "search",
+                "source_citation",
+                "summarize_page",
             ),
         )
 
@@ -101,15 +123,24 @@ class ToolProtocolTests(unittest.TestCase):
         browser_fetch_tool = registry.get("browser_fetch")
         http_api_tool = registry.get("http_api")
         code_exec_tool = registry.get("code_exec")
+        search_tool = registry.get("search")
+        summarize_page_tool = registry.get("summarize_page")
+        source_citation_tool = registry.get("source_citation")
 
         self.assertIsNotNone(calculator_tool)
         self.assertIsNotNone(browser_fetch_tool)
         self.assertIsNotNone(http_api_tool)
         self.assertIsNotNone(code_exec_tool)
+        self.assertIsNotNone(search_tool)
+        self.assertIsNotNone(summarize_page_tool)
+        self.assertIsNotNone(source_citation_tool)
         self.assertFalse(calculator_tool.requires_approval)
         self.assertTrue(browser_fetch_tool.requires_approval)
         self.assertTrue(http_api_tool.requires_approval)
         self.assertTrue(code_exec_tool.requires_approval)
+        self.assertFalse(search_tool.requires_approval)
+        self.assertTrue(summarize_page_tool.requires_approval)
+        self.assertFalse(source_citation_tool.requires_approval)
 
     def test_tools_execute_with_tool_call(self) -> None:
         # 用结构化参数执行代表性的低风险工具，证明调用方不再需要
@@ -141,6 +172,44 @@ class ToolProtocolTests(unittest.TestCase):
         self.assertTrue(echo_result.ok)
         payload = json.loads(echo_result.output.removeprefix("json_echo: "))
         self.assertEqual(payload["tool_input"], "hello protocol")
+
+    def test_browser_tools_execute_through_protocol_executor(self) -> None:
+        # 新浏览工具本身只声明协议，真正的网络策略集中在 runtime 注入的 browse_web 执行器里。
+        registry = ToolRegistry()
+        register_builtin_tools(
+            registry,
+            safe_eval=_safe_eval,
+            fetch_http=_fetch_http,
+            enable_code_execution=True,
+            browse_web=_browse_web,
+        )
+
+        summarize_tool = registry.get("summarize_page")
+        citation_tool = registry.get("source_citation")
+
+        self.assertIsNotNone(summarize_tool)
+        self.assertIsNotNone(citation_tool)
+
+        summarize_result = summarize_tool.execute(
+            ToolCall(
+                tool_name="summarize_page",
+                arguments={"url": "https://example.com"},
+            ),
+            _context(),
+        )
+        self.assertTrue(summarize_result.ok)
+        self.assertIn("https://example.com", summarize_result.output)
+        self.assertEqual(summarize_result.metadata["source_url"], "https://example.com")
+
+        citation_result = citation_tool.execute(
+            ToolCall(
+                tool_name="source_citation",
+                arguments={"url": "https://example.com"},
+            ),
+            _context(),
+        )
+        self.assertTrue(citation_result.ok)
+        self.assertIn("[1] https://example.com", citation_result.output)
 
     def test_tool_error_shape_is_returned_on_failure(self) -> None:
         # 失败结果既要通过 output 可读，也要通过 ToolError 机器可读，
@@ -228,9 +297,42 @@ class ToolProtocolTests(unittest.TestCase):
         approval = next(item for item in infos if item["agent_event"] == "approval_required")
 
         self.assertEqual(approval["schema"], "synapse.agent.info.v1")
-        self.assertEqual(approval["payload"]["tool"], "browser_fetch")
+        self.assertEqual(approval["payload"]["tool"], "summarize_page")
         self.assertEqual(approval["payload"]["resume_step_index"], 1)
         self.assertEqual(approval["payload"]["reason"], "approval_required")
+
+    def test_browser_runtime_search_and_allowlist_errors_are_structured(self) -> None:
+        # search 当前不依赖外部搜索服务；先把查询里的 URL 标准化为来源候选，保证 mock regression 稳定。
+        runtime = AgentRuntime(
+            model_provider="mock",
+            agent_tool_http_allowlist=("example.com",),
+            agent_tool_audit_log_file="",
+        )
+
+        search_result = runtime._execute_browser_tool(
+            "search",
+            ToolCall(
+                tool_name="search",
+                arguments={"query": "search https://example.com for source"},
+            ),
+            _context(),
+        )
+        self.assertTrue(search_result.ok)
+        self.assertIn("https://example.com", search_result.output)
+        self.assertEqual(search_result.metadata["sources"], ["https://example.com"])
+
+        blocked_result = runtime._execute_browser_tool(
+            "open_url",
+            ToolCall(
+                tool_name="open_url",
+                arguments={"url": "https://blocked.example.org/page"},
+            ),
+            _context(),
+        )
+        self.assertFalse(blocked_result.ok)
+        self.assertIsNotNone(blocked_result.error)
+        self.assertEqual(blocked_result.error.code, "host_not_allowed")
+        self.assertEqual(blocked_result.error.details["operation"], "open_url")
 
     def test_runtime_emits_standard_tool_failed_event(self) -> None:
         # 覆盖策略和审批均通过后的执行级失败：工具已被选择并启动，

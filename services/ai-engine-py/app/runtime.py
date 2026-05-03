@@ -1,8 +1,10 @@
 import asyncio
 import ast
+import html
 import json
 import pathlib
 import re
+import socket
 import threading
 import time
 from dataclasses import dataclass
@@ -34,6 +36,9 @@ METADATA_AGENT_REQUIRED_TOOL_KEY = "agent_required_tool"
 METADATA_AGENT_RESUME_REQUESTED_BY_KEY = "agent_resume_requested_by"
 METADATA_CLIENT_USER_MESSAGE_KEY = "user_message"
 AGENT_INFO_SCHEMA = "synapse.agent.info.v1"
+BROWSER_MAX_CONTENT_BYTES = 128 * 1024
+BROWSER_OUTPUT_TEXT_LIMIT = 2400
+BROWSER_USER_AGENT = "synapse-agent-browser/1.0"
 
 
 @dataclass(frozen=True)
@@ -90,6 +95,25 @@ class ReplanDecision:
     should_replan: bool
     reason: str = ""
     decision: PlannerDecision | None = None
+
+
+@dataclass(frozen=True)
+class BrowserDocument:
+    """浏览器工具内部流转的页面快照。
+
+    这个结构不直接暴露给 Gateway，而是帮助 search/open/extract/summarize 共用同一份
+    请求、解析和审计结果，避免每个工具重复实现网络安全边界。
+    """
+
+    requested_url: str
+    final_url: str
+    status_code: int
+    content_type: str
+    raw_text: str
+    text: str
+    title: str
+    byte_count: int
+    truncated: bool
 
 
 class AgentMemoryStore:
@@ -299,6 +323,7 @@ class AgentRuntime:
             safe_eval=self._safe_eval_expression,
             fetch_http=self._execute_http_tool,
             enable_code_execution=self._agent_enable_code_execution,
+            browse_web=self._execute_browser_tool,
         )
 
         default_approval_required: set[str] = set()
@@ -322,6 +347,11 @@ class AgentRuntime:
                     "calculator",
                     "browser_fetch",
                     "http_api",
+                    "search",
+                    "open_url",
+                    "extract_text",
+                    "summarize_page",
+                    "source_citation",
                     "json_echo",
                 },
             },
@@ -873,6 +903,8 @@ class AgentRuntime:
             payload["ok"] = result.ok
             payload["output"] = result.output
             payload["output_preview"] = result.output[:600]
+            if result.metadata:
+                payload["metadata"] = result.metadata
             if result.error is not None:
                 payload["error"] = {
                     "code": result.error.code,
@@ -1237,7 +1269,14 @@ class AgentRuntime:
                     ),
                 )
 
-        if failed_decision.tool_name in {"browser_fetch", "http_api"}:
+        if failed_decision.tool_name in {
+            "browser_fetch",
+            "http_api",
+            "search",
+            "open_url",
+            "extract_text",
+            "summarize_page",
+        }:
             return ReplanDecision(
                 should_replan=True,
                 reason="network_tool_failed_use_retrieval",
@@ -1331,9 +1370,21 @@ class AgentRuntime:
         url = self._extract_first_url(objective) or self._extract_first_url(prompt)
         if url:
             normalized_url = url.lower()
+            if any(token in lowered for token in ("search", "lookup", "web search", "网页搜索", "搜索网页")):
+                return ("search", objective)
             if "api" in lowered or "/api/" in normalized_url or normalized_url.endswith(".json"):
                 return ("http_api", url)
-            return ("browser_fetch", url)
+            if "browser_fetch" in lowered:
+                return ("browser_fetch", url)
+            if any(token in lowered for token in ("extract", "text", "正文", "提取")):
+                return ("extract_text", url)
+            if any(token in lowered for token in ("summary", "summarize", "总结", "摘要", "概括")):
+                return ("summarize_page", url)
+            if any(token in lowered for token in ("cite", "citation", "source citation", "来源", "引用")):
+                return ("source_citation", url)
+            if any(token in lowered for token in ("open", "visit", "read", "打开", "访问", "浏览")):
+                return ("open_url", url)
+            return ("open_url", url)
 
         if any(token in lowered for token in ("python", "script", "code", "代码", "脚本", "执行")):
             candidate_expression = self._extract_math_expression(objective) or objective
@@ -1343,6 +1394,9 @@ class AgentRuntime:
         if math_expression:
             return ("calculator", math_expression)
 
+        if any(token in lowered for token in ("search", "lookup", "web search", "网页搜索", "搜索网页")):
+            return ("search", objective)
+
         if any(token in lowered for token in ("search", "lookup", "retrieve", "查询", "搜", "检索")):
             return ("retrieval", objective)
 
@@ -1350,7 +1404,13 @@ class AgentRuntime:
             normalized_url = context_url.lower()
             if "api" in lowered or "/api/" in normalized_url or normalized_url.endswith(".json"):
                 return ("http_api", context_url)
-            return ("browser_fetch", context_url)
+            if any(token in lowered for token in ("extract", "text", "正文", "提取")):
+                return ("extract_text", context_url)
+            if any(token in lowered for token in ("summary", "summarize", "总结", "摘要", "概括")):
+                return ("summarize_page", context_url)
+            if any(token in lowered for token in ("cite", "citation", "source citation", "来源", "引用")):
+                return ("source_citation", context_url)
+            return ("open_url", context_url)
 
         return ("none", "")
 
@@ -1488,6 +1548,7 @@ class AgentRuntime:
             outcome=result.output,
             ok=result.ok,
             duration_ms=duration_ms,
+            reason=result.error.code if result.error is not None else "",
         )
 
         return result
@@ -1498,7 +1559,11 @@ class AgentRuntime:
         normalized_name = tool_name.strip().lower()
         if normalized_name == "calculator":
             return {"expression": tool_input}
-        if normalized_name in {"browser_fetch", "http_api"}:
+        if normalized_name in {"browser_fetch", "http_api", "open_url", "extract_text", "summarize_page"}:
+            return {"url": tool_input}
+        if normalized_name == "search":
+            return {"query": tool_input}
+        if normalized_name == "source_citation":
             return {"url": tool_input}
         if normalized_name == "code_exec":
             return {"code": tool_input}
@@ -1514,57 +1579,387 @@ class AgentRuntime:
         parse_json: bool,
     ) -> ToolResult:
         tool_name = "http_api" if parse_json else "browser_fetch"
-        normalized_url = self._normalize_tool_url(url)
-        if not normalized_url:
-            return ToolResult(ok=False, output=f"{tool_name} failed: URL is required")
+        document_result = self._fetch_browser_document(tool_name, url)
+        if isinstance(document_result, ToolResult):
+            return document_result
 
-        parsed = urllib_parse.urlparse(normalized_url)
-        if parsed.scheme not in {"http", "https"} or not parsed.netloc:
-            return ToolResult(ok=False, output=f"{tool_name} failed: unsupported URL")
-
-        host = (parsed.hostname or "").strip().lower()
-        if not self._is_host_allowed(host):
-            return ToolResult(
-                ok=False,
-                output=f"{tool_name} blocked: host {host} is not in allowlist",
+        document = document_result
+        if parse_json:
+            payload = document.raw_text
+            try:
+                parsed_json = json.loads(document.raw_text)
+                payload = json.dumps(parsed_json, ensure_ascii=True)
+            except json.JSONDecodeError:
+                payload = document.raw_text
+            return ToolResult.success(
+                f"{tool_name} response: {payload[:BROWSER_OUTPUT_TEXT_LIMIT]}",
+                metadata=self._browser_document_metadata(tool_name, document),
             )
+
+        return ToolResult.success(
+            f"{tool_name} response: Source: {document.final_url} | {document.text[:BROWSER_OUTPUT_TEXT_LIMIT]}",
+            metadata=self._browser_document_metadata(tool_name, document),
+        )
+
+    def _execute_browser_tool(
+        self,
+        operation: str,
+        call: ToolCall,
+        context: ToolContext,
+    ) -> ToolResult:
+        # 浏览工具统一在 runtime 执行，便于把网络安全策略、审计和错误分类集中到一个边界。
+        # context 当前只用于保留接口一致性，后续可用于按用户或任务追加浏览策略。
+        _ = context
+        normalized_operation = operation.strip().lower()
+
+        if normalized_operation == "search":
+            return self._execute_browser_search(call.argument_text("query"))
+        if normalized_operation == "source_citation":
+            return self._execute_source_citation(
+                url=call.argument_text("url"),
+                title=str(call.arguments.get("title", "") or ""),
+                snippet=str(call.arguments.get("snippet", "") or ""),
+            )
+
+        url = call.argument_text("url")
+        document_result = self._fetch_browser_document(normalized_operation, url)
+        if isinstance(document_result, ToolResult):
+            return document_result
+
+        document = document_result
+        if normalized_operation == "open_url":
+            title = document.title or "(untitled)"
+            output = (
+                f"open_url result: Source: {document.final_url} | "
+                f"Status: {document.status_code} | Content-Type: {document.content_type} | Title: {title}"
+            )
+            return ToolResult.success(
+                output,
+                metadata=self._browser_document_metadata(normalized_operation, document),
+            )
+
+        if normalized_operation == "extract_text":
+            output = (
+                f"extract_text result: Source: {document.final_url}\n"
+                f"Title: {document.title or '(untitled)'}\n"
+                f"Text: {document.text[:BROWSER_OUTPUT_TEXT_LIMIT]}"
+            )
+            return ToolResult.success(
+                output,
+                metadata=self._browser_document_metadata(normalized_operation, document),
+            )
+
+        if normalized_operation == "summarize_page":
+            points = self._summarize_fallback_points(document.text)
+            if not points:
+                points = [document.title or "No readable text extracted from page."]
+            lines = ["summarize_page result:", f"Source: {document.final_url}"]
+            for point in points[:4]:
+                lines.append(f"- {point}")
+            lines.append(f"Sources: [1] {document.final_url}")
+            return ToolResult.success(
+                "\n".join(lines),
+                metadata=self._browser_document_metadata(normalized_operation, document),
+            )
+
+        return ToolResult.failure(
+            f"{normalized_operation} failed: unsupported browser operation",
+            code="unsupported_browser_operation",
+            details={"operation": normalized_operation},
+        )
+
+    def _execute_browser_search(self, query: str) -> ToolResult:
+        normalized_query = " ".join(query.strip().split())
+        if not normalized_query:
+            return ToolResult.failure(
+                "search failed: query is required",
+                code="invalid_input",
+            )
+
+        urls = self._extract_urls(normalized_query)
+        allowed_urls: list[str] = []
+        blocked_urls: list[str] = []
+        for raw_url in urls:
+            normalized_url = self._normalize_tool_url(raw_url)
+            parsed = urllib_parse.urlparse(normalized_url)
+            host = (parsed.hostname or "").strip().lower()
+            if parsed.scheme in {"http", "https"} and parsed.netloc and self._is_host_allowed(host):
+                allowed_urls.append(normalized_url)
+            else:
+                blocked_urls.append(normalized_url or raw_url)
+
+        if allowed_urls:
+            lines = ["search results:"]
+            for index, source_url in enumerate(allowed_urls[:5], start=1):
+                lines.append(f"[{index}] {source_url} - candidate source from query")
+            return ToolResult.success(
+                "\n".join(lines),
+                metadata={
+                    "operation": "search",
+                    "sources": allowed_urls[:5],
+                    "blocked_sources": blocked_urls[:5],
+                    "audit": {
+                        "allowlist_checked": True,
+                        "network_request": False,
+                    },
+                },
+            )
+
+        return ToolResult.failure(
+            "search failed: no allowlisted URL found in query and no search provider is configured",
+            code="search_provider_unavailable",
+            retryable=False,
+            details={
+                "operation": "search",
+                "query_preview": normalized_query[:160],
+                "blocked_sources": blocked_urls[:5],
+            },
+        )
+
+    def _execute_source_citation(self, url: str, title: str = "", snippet: str = "") -> ToolResult:
+        normalized_url = self._normalize_tool_url(url)
+        validation_error = self._validate_browser_url("source_citation", normalized_url)
+        if validation_error is not None:
+            return validation_error
+
+        safe_title = " ".join(title.strip().split()) or normalized_url
+        safe_snippet = " ".join(snippet.strip().split())
+        citation = f"source_citation result: [1] {safe_title} - {normalized_url}"
+        if safe_snippet:
+            citation += f" | {safe_snippet[:220]}"
+
+        return ToolResult.success(
+            citation,
+            metadata={
+                "operation": "source_citation",
+                "source_url": normalized_url,
+                "sources": [normalized_url],
+                "audit": {
+                    "allowlist_checked": True,
+                    "network_request": False,
+                },
+            },
+        )
+
+    def _fetch_browser_document(self, operation: str, url: str) -> BrowserDocument | ToolResult:
+        normalized_url = self._normalize_tool_url(url)
+        validation_error = self._validate_browser_url(operation, normalized_url)
+        if validation_error is not None:
+            return validation_error
 
         request = urllib_request.Request(
             normalized_url,
             headers={
-                "Accept": "application/json, text/plain, */*",
-                "User-Agent": "synapse-agent-runtime/1.0",
+                "Accept": "text/html, application/json, text/plain, */*",
+                "User-Agent": BROWSER_USER_AGENT,
             },
             method="GET",
         )
 
-        raw = ""
         attempts = 2
         for attempt in range(1, attempts + 1):
             try:
                 with urllib_request.urlopen(request, timeout=self._agent_tool_http_timeout_seconds) as response:
-                    raw = response.read(65536).decode("utf-8", errors="ignore")
-                break
+                    raw_bytes = response.read(BROWSER_MAX_CONTENT_BYTES + 1)
+                    truncated = len(raw_bytes) > BROWSER_MAX_CONTENT_BYTES
+                    if truncated:
+                        raw_bytes = raw_bytes[:BROWSER_MAX_CONTENT_BYTES]
+
+                    charset = ""
+                    try:
+                        charset = response.headers.get_content_charset() or ""
+                    except Exception:
+                        charset = ""
+                    raw_text = raw_bytes.decode(charset or "utf-8", errors="replace")
+                    content_type = response.headers.get("Content-Type", "") if response.headers else ""
+                    final_url = response.geturl() or normalized_url
+                    text = self._extract_browser_text(raw_text, content_type)
+                    title = self._extract_browser_title(raw_text)
+                    return BrowserDocument(
+                        requested_url=normalized_url,
+                        final_url=final_url,
+                        status_code=int(getattr(response, "status", response.getcode()) or 0),
+                        content_type=content_type,
+                        raw_text=raw_text,
+                        text=text,
+                        title=title,
+                        byte_count=len(raw_bytes),
+                        truncated=truncated,
+                    )
+            except urllib_error.HTTPError as exc:
+                body = exc.read(BROWSER_OUTPUT_TEXT_LIMIT).decode("utf-8", errors="replace")
+                retryable = exc.code in {408, 429, 500, 502, 503, 504}
+                if attempt < attempts and retryable:
+                    time.sleep(0.35 * attempt)
+                    continue
+                return self._browser_failure(
+                    operation,
+                    f"HTTP {exc.code} {body[:240]}",
+                    code="http_error",
+                    retryable=retryable,
+                    details={
+                        "url": normalized_url,
+                        "status_code": exc.code,
+                    },
+                )
             except urllib_error.URLError as exc:
-                if attempt >= attempts:
-                    return ToolResult(ok=False, output=f"{tool_name} failed: {exc}")
-                time.sleep(0.35 * attempt)
+                failure = self._browser_failure_from_url_error(operation, normalized_url, exc)
+                if attempt < attempts and failure.error is not None and failure.error.retryable:
+                    time.sleep(0.35 * attempt)
+                    continue
+                return failure
+            except (TimeoutError, socket.timeout) as exc:
+                if attempt < attempts:
+                    time.sleep(0.35 * attempt)
+                    continue
+                return self._browser_failure(
+                    operation,
+                    f"request timed out after {self._agent_tool_http_timeout_seconds:.1f}s",
+                    code="timeout",
+                    retryable=True,
+                    details={"url": normalized_url, "exception": str(exc)},
+                )
             except Exception as exc:
-                if attempt >= attempts:
-                    return ToolResult(ok=False, output=f"{tool_name} failed: {exc}")
-                time.sleep(0.35 * attempt)
+                return self._browser_failure(
+                    operation,
+                    str(exc),
+                    code="request_failed",
+                    retryable=False,
+                    details={"url": normalized_url},
+                )
 
-        if parse_json:
+        return self._browser_failure(
+            operation,
+            "request failed after retries",
+            code="request_failed",
+            retryable=True,
+            details={"url": normalized_url},
+        )
+
+    def _validate_browser_url(self, operation: str, url: str) -> ToolResult | None:
+        if not url:
+            return self._browser_failure(operation, "URL is required", code="invalid_url")
+
+        parsed = urllib_parse.urlparse(url)
+        if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+            return self._browser_failure(
+                operation,
+                "only HTTP and HTTPS URLs are supported",
+                code="unsupported_url",
+                details={"url": url},
+            )
+
+        host = (parsed.hostname or "").strip().lower()
+        if not self._is_host_allowed(host):
+            return self._browser_failure(
+                operation,
+                f"host {host} is not in allowlist",
+                code="host_not_allowed",
+                details={"url": url, "host": host},
+            )
+
+        return None
+
+    def _browser_failure_from_url_error(
+        self,
+        operation: str,
+        url: str,
+        exc: urllib_error.URLError,
+    ) -> ToolResult:
+        reason = exc.reason
+        if isinstance(reason, (TimeoutError, socket.timeout)):
+            return self._browser_failure(
+                operation,
+                f"request timed out after {self._agent_tool_http_timeout_seconds:.1f}s",
+                code="timeout",
+                retryable=True,
+                details={"url": url},
+            )
+
+        return self._browser_failure(
+            operation,
+            str(reason),
+            code="network_error",
+            retryable=True,
+            details={"url": url},
+        )
+
+    def _browser_failure(
+        self,
+        operation: str,
+        message: str,
+        code: str,
+        retryable: bool = False,
+        details: dict[str, Any] | None = None,
+    ) -> ToolResult:
+        failure_details = dict(details or {})
+        failure_details.setdefault("operation", operation)
+        failure_details.setdefault("timeout_seconds", self._agent_tool_http_timeout_seconds)
+        failure_details.setdefault("max_content_bytes", BROWSER_MAX_CONTENT_BYTES)
+        return ToolResult.failure(
+            f"{operation} failed: {message}",
+            code=code,
+            retryable=retryable,
+            details=failure_details,
+        )
+
+    def _browser_document_metadata(
+        self,
+        operation: str,
+        document: BrowserDocument,
+    ) -> dict[str, Any]:
+        return {
+            "operation": operation,
+            "source_url": document.final_url,
+            "sources": [document.final_url],
+            "requested_url": document.requested_url,
+            "status_code": document.status_code,
+            "content_type": document.content_type,
+            "byte_count": document.byte_count,
+            "truncated": document.truncated,
+            "title": document.title,
+            "audit": {
+                "allowlist_checked": True,
+                "timeout_seconds": self._agent_tool_http_timeout_seconds,
+                "max_content_bytes": BROWSER_MAX_CONTENT_BYTES,
+                "network_request": True,
+            },
+        }
+
+    def _extract_browser_title(self, raw_text: str) -> str:
+        match = re.search(r"<title[^>]*>(.*?)</title>", raw_text, flags=re.IGNORECASE | re.DOTALL)
+        if not match:
+            return ""
+
+        title = re.sub(r"<[^>]+>", " ", match.group(1))
+        return " ".join(html.unescape(title).split())[:220]
+
+    def _extract_browser_text(self, raw_text: str, content_type: str) -> str:
+        if "json" in content_type.lower():
             try:
-                parsed_json = json.loads(raw)
-                compact = json.dumps(parsed_json, ensure_ascii=True)
-                return ToolResult(ok=True, output=f"{tool_name} response: {compact[:2400]}")
+                parsed = json.loads(raw_text)
+                return json.dumps(parsed, ensure_ascii=True)[:BROWSER_OUTPUT_TEXT_LIMIT]
             except json.JSONDecodeError:
-                return ToolResult(ok=True, output=f"{tool_name} response: {raw[:2400]}")
+                pass
 
-        stripped = re.sub(r"<[^>]+>", " ", raw)
-        compact = " ".join(stripped.split())
-        return ToolResult(ok=True, output=f"{tool_name} response: {compact[:2400]}")
+        cleaned = re.sub(r"(?is)<script[^>]*>.*?</script>", " ", raw_text)
+        cleaned = re.sub(r"(?is)<style[^>]*>.*?</style>", " ", cleaned)
+        cleaned = re.sub(r"(?is)<!--.*?-->", " ", cleaned)
+        cleaned = re.sub(r"<[^>]+>", " ", cleaned)
+        return " ".join(html.unescape(cleaned).split())
+
+    def _extract_urls(self, text: str) -> list[str]:
+        matches = re.findall(r"https?://[A-Za-z0-9\-._~:/?#\[\]@!$&'()*+,;=%]+", text)
+        urls: list[str] = []
+        seen: set[str] = set()
+        for raw_url in matches:
+            normalized = self._normalize_tool_url(raw_url)
+            lowered = normalized.lower()
+            if not normalized or lowered in seen:
+                continue
+            seen.add(lowered)
+            urls.append(normalized)
+        return urls
 
     def _normalize_tool_url(self, text: str) -> str:
         candidate = self._extract_first_url(text)
@@ -1585,7 +1980,15 @@ class AgentRuntime:
             return ""
 
         for tool_name, raw_output in reversed(tool_observations):
-            if tool_name not in {"browser_fetch", "http_api"}:
+            if tool_name not in {
+                "browser_fetch",
+                "http_api",
+                "search",
+                "open_url",
+                "extract_text",
+                "summarize_page",
+                "source_citation",
+            }:
                 continue
 
             payload = self._extract_tool_payload(raw_output, tool_name)
@@ -1622,6 +2025,11 @@ class AgentRuntime:
         lowered = normalized.lower()
         if lowered.startswith(prefix):
             return normalized[len(prefix) :].strip()
+        result_prefix = f"{tool_name} result:"
+        if lowered.startswith(result_prefix):
+            return normalized[len(result_prefix) :].strip()
+        if tool_name == "search" and lowered.startswith("search results:"):
+            return normalized[len("search results:") :].strip()
         return normalized
 
     def _summarize_fallback_points(self, payload: str) -> list[str]:

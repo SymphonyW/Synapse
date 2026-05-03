@@ -19,6 +19,7 @@ class BenchmarkCase:
     expect_pause: bool
     required_events: tuple[str, ...]
     required_tools: tuple[str, ...]
+    required_answer_contains: tuple[str, ...]
 
 
 @dataclass(frozen=True)
@@ -32,6 +33,7 @@ class BenchmarkResult:
     duration_ms: int
     missing_events: tuple[str, ...]
     missing_tools: tuple[str, ...]
+    missing_answer_fragments: tuple[str, ...]
 
 
 def _read_float_env(name: str, default_value: float) -> float:
@@ -72,6 +74,7 @@ def _load_cases(file_path: pathlib.Path) -> list[BenchmarkCase]:
         expect_pause = bool(item.get("expect_pause", False))
         required_events = _read_string_tuple(item.get("required_events", []))
         required_tools = _read_string_tuple(item.get("required_tools", []))
+        required_answer_contains = _read_string_tuple(item.get("required_answer_contains", []))
 
         cases.append(
             BenchmarkCase(
@@ -82,6 +85,7 @@ def _load_cases(file_path: pathlib.Path) -> list[BenchmarkCase]:
                 expect_pause=expect_pause,
                 required_events=required_events,
                 required_tools=required_tools,
+                required_answer_contains=required_answer_contains,
             )
         )
 
@@ -131,6 +135,7 @@ async def _run_case(runtime: AgentRuntime, case: BenchmarkCase, task_index: int)
     blocked_actions = 0
     seen_events: set[str] = set()
     seen_tools: set[str] = set()
+    answer_chunks: list[str] = []
 
     async for event in runtime.run_task(
         task_id=f"benchmark-{task_index}-{case.case_id}",
@@ -140,6 +145,10 @@ async def _run_case(runtime: AgentRuntime, case: BenchmarkCase, task_index: int)
     ):
         if event.kind == "pause":
             paused = True
+            continue
+
+        if event.kind == "token":
+            answer_chunks.append(event.token)
             continue
 
         if event.kind != "info":
@@ -170,7 +179,11 @@ async def _run_case(runtime: AgentRuntime, case: BenchmarkCase, task_index: int)
 
     missing_events = tuple(item for item in case.required_events if item not in seen_events)
     missing_tools = tuple(item for item in case.required_tools if item not in seen_tools)
-    passed = passed and not missing_events and not missing_tools
+    answer_text = "".join(answer_chunks)
+    missing_answer_fragments = tuple(
+        item for item in case.required_answer_contains if item not in answer_text
+    )
+    passed = passed and not missing_events and not missing_tools and not missing_answer_fragments
 
     return BenchmarkResult(
         case_id=case.case_id,
@@ -182,6 +195,7 @@ async def _run_case(runtime: AgentRuntime, case: BenchmarkCase, task_index: int)
         duration_ms=duration_ms,
         missing_events=missing_events,
         missing_tools=missing_tools,
+        missing_answer_fragments=missing_answer_fragments,
     )
 
 
@@ -241,6 +255,7 @@ async def _run_all(cases: list[BenchmarkCase]) -> dict[str, Any]:
                 "duration_ms": item.duration_ms,
                 "missing_events": list(item.missing_events),
                 "missing_tools": list(item.missing_tools),
+                "missing_answer_fragments": list(item.missing_answer_fragments),
             }
             for item in results
         ],

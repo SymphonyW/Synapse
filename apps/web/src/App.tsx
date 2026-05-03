@@ -131,7 +131,8 @@ const AUTH_SESSION_STORAGE_KEY = 'synapse.web.auth.session'
 const CLIENT_CONVERSATION_ID_KEY = 'conversation_id'
 const CLIENT_USER_MESSAGE_KEY = 'user_message'
 const NEW_CONVERSATION_DRAFT_ID = '__draft__'
-const DEFAULT_APPROVED_TOOLS = 'browser_fetch,http_api,retrieval,calculator'
+const DEFAULT_APPROVED_TOOLS =
+  'browser_fetch,http_api,open_url,extract_text,summarize_page,retrieval,calculator'
 
 function normalizeUsername(value: string): string {
   return value.trim().toLowerCase()

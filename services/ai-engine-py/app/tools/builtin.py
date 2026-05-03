@@ -7,6 +7,9 @@ from app.tools.base import BaseAgentTool, RiskLevel, ToolCall, ToolContext, Tool
 from app.tools.registry import ToolRegistry
 
 
+BrowserToolExecutor = Callable[[str, ToolCall, ToolContext], ToolResult]
+
+
 # 内置工具有意保持轻量：策略、审批和审计由 AgentRuntime 负责，
 # 单个工具只关注校验调用形态并返回统一的 ToolResult。
 class RetrievalTool(BaseAgentTool):
@@ -232,11 +235,143 @@ class JsonEchoTool(BaseAgentTool):
         return ToolResult.success("json_echo: " + json.dumps(payload, ensure_ascii=True))
 
 
+class BrowserOperationTool(BaseAgentTool):
+    def __init__(
+        self,
+        name: str,
+        description: str,
+        input_schema: dict[str, Any],
+        operation: str,
+        browse_web: BrowserToolExecutor,
+        risk_level: RiskLevel = "high",
+        requires_approval: bool = True,
+    ) -> None:
+        self.name = name
+        self.description = description
+        self.input_schema = input_schema
+        self.operation = operation
+        self.browse_web = browse_web
+        self.risk_level = risk_level
+        self.requires_approval = requires_approval
+
+    def execute(self, call: ToolCall, context: ToolContext) -> ToolResult:
+        # 浏览工具共享同一个 runtime 执行器，确保网络 allowlist、超时、大小限制和审计口径一致。
+        # 具体工具只声明自身协议元数据，避免把安全边界分散在多个实现里。
+        return self.browse_web(self.operation, call, context)
+
+
+def _browser_tool_definitions(
+    browse_web: BrowserToolExecutor,
+) -> tuple[BrowserOperationTool, ...]:
+    # search 先提供可测试的 URL 发现路径；后续接入搜索服务时仍然复用同一协议和网络护栏。
+    search_schema = {
+        "type": "object",
+        "properties": {
+            "query": {
+                "type": "string",
+                "description": "Search query or URL to discover browser sources.",
+            }
+        },
+        "required": ["query"],
+        "additionalProperties": False,
+    }
+
+    url_schema = {
+        "type": "object",
+        "properties": {
+            "url": {
+                "type": "string",
+                "format": "uri",
+                "description": "HTTP or HTTPS URL to browse.",
+            }
+        },
+        "required": ["url"],
+        "additionalProperties": False,
+    }
+
+    citation_schema = {
+        "type": "object",
+        "properties": {
+            "url": {
+                "type": "string",
+                "format": "uri",
+                "description": "Source URL to cite.",
+            },
+            "title": {
+                "type": "string",
+                "description": "Optional source title.",
+            },
+            "snippet": {
+                "type": "string",
+                "description": "Optional source snippet.",
+            },
+        },
+        "required": ["url"],
+        "additionalProperties": False,
+    }
+
+    return (
+        BrowserOperationTool(
+            name="search",
+            description="Search for a browseable source and return candidate source URLs.",
+            input_schema=search_schema,
+            operation="search",
+            browse_web=browse_web,
+            risk_level="medium",
+            requires_approval=False,
+        ),
+        BrowserOperationTool(
+            name="open_url",
+            description="Open an allowlisted URL and return page metadata plus a source URL.",
+            input_schema=url_schema,
+            operation="open_url",
+            browse_web=browse_web,
+        ),
+        BrowserOperationTool(
+            name="extract_text",
+            description="Fetch an allowlisted page and extract readable text with source metadata.",
+            input_schema=url_schema,
+            operation="extract_text",
+            browse_web=browse_web,
+        ),
+        BrowserOperationTool(
+            name="summarize_page",
+            description="Fetch an allowlisted page, extract text, and produce a short cited summary.",
+            input_schema=url_schema,
+            operation="summarize_page",
+            browse_web=browse_web,
+        ),
+        BrowserOperationTool(
+            name="source_citation",
+            description="Format a source URL as a citation without performing a network request.",
+            input_schema=citation_schema,
+            operation="source_citation",
+            browse_web=browse_web,
+            risk_level="low",
+            requires_approval=False,
+        ),
+    )
+
+
+def _disabled_browser_tool(
+    operation: str,
+    call: ToolCall,
+    context: ToolContext,
+) -> ToolResult:
+    # 单元测试可以只注册协议元数据而不提供网络执行器；此时浏览工具明确失败而不是静默联网。
+    _ = (call, context)
+    return ToolResult.failure(
+        f"{operation} failed: browser execution is not configured",
+        code="browser_disabled",
+    )
+
+
 def register_builtin_tools(
     registry: ToolRegistry,
     safe_eval: Callable[[str], str],
     fetch_http: Callable[[str, bool], ToolResult],
     enable_code_execution: bool,
+    browse_web: BrowserToolExecutor | None = None,
 ) -> None:
     # 注册顺序不影响查找；把完整内置工具集集中在这里，
     # 让默认策略和协议测试共享同一个工具可用性来源。
@@ -246,3 +381,5 @@ def register_builtin_tools(
     registry.register(HttpAPITool(fetch_http=fetch_http))
     registry.register(CodeExecTool(safe_eval=safe_eval, enabled=enable_code_execution))
     registry.register(JsonEchoTool())
+    for browser_tool in _browser_tool_definitions(browse_web or _disabled_browser_tool):
+        registry.register(browser_tool)

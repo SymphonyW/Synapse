@@ -70,3 +70,44 @@ func TestProcessWithRetryPausesTaskOnApprovalRequired(t *testing.T) {
 		t.Fatalf("expected paused event, got %#v", events)
 	}
 }
+
+// 验证标准化工具 info 事件会原样持久化，不被 Gateway 解析或重写。
+func TestProcessWithRetryPersistsStandardToolInfoEventVerbatim(t *testing.T) {
+	taskStore := store.NewInMemory()
+	seedWorkerTask(t, taskStore, "task-tool-info-raw", domain.TaskQueued, "")
+
+	now := time.Now().UTC().UnixMilli()
+	rawToolEvent := `{"schema":"synapse.agent.info.v1","agent_event":"tool_finished","payload":{"step_index":1,"tool":"calculator","tool_input":"8 * 9","ok":true,"output":"calculator result: 72"},"display_message":"Tool finished: calculator"}`
+	agentClient := &fakeAgentClient{
+		submitTask: func(ctx context.Context, task domain.Task) (agentv1.AgentRuntime_SubmitTaskClient, error) {
+			return newScriptedSubmitTaskStream(ctx, []*agentv1.AgentEvent{
+				{Type: agentv1.AgentEventType_AGENT_EVENT_TYPE_STARTED, Message: "task started", EmittedAtUnixMs: now},
+				{
+					Type:            agentv1.AgentEventType_AGENT_EVENT_TYPE_INFO,
+					Message:         rawToolEvent,
+					EmittedAtUnixMs: now + 1,
+				},
+				{Type: agentv1.AgentEventType_AGENT_EVENT_TYPE_COMPLETED, Message: "task completed", EmittedAtUnixMs: now + 2},
+			}), nil
+		},
+	}
+
+	processor := NewTaskProcessor(taskStore, queue.NewInMemoryQueue(4), agentClient, ProcessorOptions{
+		MaxAttempts:  1,
+		RetryBackoff: 5 * time.Millisecond,
+	})
+	processor.processWithRetry(context.Background(), "task-tool-info-raw")
+
+	events, err := taskStore.ListEvents("task-tool-info-raw", 0, 20)
+	if err != nil {
+		t.Fatalf("ListEvents returned error: %v", err)
+	}
+
+	for _, event := range events {
+		if event.Type == "info" && event.Message == rawToolEvent {
+			return
+		}
+	}
+
+	t.Fatalf("expected raw tool info event to be persisted verbatim, got %#v", events)
+}

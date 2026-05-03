@@ -13,6 +13,7 @@ from urllib import request as urllib_request
 
 from app.tools import (
     ToolAuditLogger,
+    ToolCall,
     ToolContext,
     ToolPolicy,
     ToolRegistry,
@@ -32,6 +33,7 @@ METADATA_AGENT_RESUME_STEP_KEY = "agent_resume_step_index"
 METADATA_AGENT_REQUIRED_TOOL_KEY = "agent_required_tool"
 METADATA_AGENT_RESUME_REQUESTED_BY_KEY = "agent_resume_requested_by"
 METADATA_CLIENT_USER_MESSAGE_KEY = "user_message"
+AGENT_INFO_SCHEMA = "synapse.agent.info.v1"
 
 
 @dataclass(frozen=True)
@@ -56,7 +58,7 @@ class AgentEvaluation:
 
 
 class AgentMemoryStore:
-    """Simple file-backed long-term memory store keyed by user id."""
+    """按用户 ID 分组的简单文件型长期记忆存储。"""
 
     def __init__(self, file_path: str, max_entries_per_user: int) -> None:
         self._path = pathlib.Path(file_path).expanduser() if file_path.strip() else None
@@ -112,7 +114,7 @@ class AgentMemoryStore:
         if selected:
             return selected
 
-        # No lexical hit: return the latest memories as fallback context.
+        # 没有词面命中时，返回最近记忆作为兜底上下文。
         latest = sorted(
             (item for item in records if isinstance(item, dict)),
             key=lambda value: int(value.get("created_at_unix_ms", 0) or 0),
@@ -220,7 +222,7 @@ class AgentRuntime:
         raw_provider = model_provider.strip().lower() or "mock"
         alias = model_provider_alias.strip().lower()
 
-        # Support semantic aliases while using the same OpenAI-compatible transport path.
+        # 支持语义别名，同时复用同一条 OpenAI-compatible 传输路径。
         if raw_provider in {"zhipu", "gemini"}:
             alias = alias or raw_provider
             raw_provider = "openai"
@@ -266,9 +268,14 @@ class AgentRuntime:
 
         default_approval_required: set[str] = set()
         if self._agent_require_approval_for_high_risk:
+            # 优先使用新的 requires_approval 声明，同时保留 high_risk
+            # 作为兼容桥，支持仍只暴露旧字段的工具。
             for tool_name in self._tool_registry.names():
                 tool = self._tool_registry.get(tool_name)
-                if tool is not None and getattr(tool, "high_risk", False):
+                if tool is not None and (
+                    getattr(tool, "requires_approval", False)
+                    or getattr(tool, "high_risk", False)
+                ):
                     default_approval_required.add(tool_name)
 
         self._tool_policy = ToolPolicy.from_json(
@@ -424,6 +431,19 @@ class AgentRuntime:
                 yield RuntimeStreamItem(
                     kind="info",
                     message=self._encode_agent_info(
+                        phase="tool_selected",
+                        payload=self._build_tool_event_payload(
+                            step_index=step.index,
+                            objective=step.objective,
+                            tool_name=tool_name,
+                            tool_input=tool_input,
+                        ),
+                        display_message=f"Tool selected: {tool_name}",
+                    ),
+                )
+                yield RuntimeStreamItem(
+                    kind="info",
+                    message=self._encode_agent_info(
                         phase="decide",
                         payload={
                             "step_index": step.index,
@@ -436,6 +456,20 @@ class AgentRuntime:
             if tool_name == "none":
                 observation = "no external tool required"
                 completed_steps += 1
+                yield RuntimeStreamItem(
+                    kind="info",
+                    message=self._encode_agent_info(
+                        phase="tool_skipped",
+                        payload=self._build_tool_event_payload(
+                            step_index=step.index,
+                            objective=step.objective,
+                            tool_name=tool_name,
+                            tool_input=tool_input,
+                            reason="no_tool_selected",
+                        ),
+                        display_message="Tool skipped: no external tool required",
+                    ),
+                )
             elif not self._is_tool_allowed_for_role(tool_name, actor_role):
                 blocked_actions += 1
                 observation = f"tool {tool_name} is blocked for role {actor_role}"
@@ -461,6 +495,21 @@ class AgentRuntime:
                         },
                     ),
                 )
+                yield RuntimeStreamItem(
+                    kind="info",
+                    message=self._encode_agent_info(
+                        phase="tool_skipped",
+                        payload=self._build_tool_event_payload(
+                            step_index=step.index,
+                            objective=step.objective,
+                            tool_name=tool_name,
+                            tool_input=tool_input,
+                            reason="policy_blocked",
+                            extra={"role": actor_role},
+                        ),
+                        display_message=f"Tool skipped: {tool_name} blocked for role {actor_role}",
+                    ),
+                )
             elif self._tool_requires_approval(tool_name) and not (
                 approval_granted or tool_name in approved_tools
             ):
@@ -480,14 +529,26 @@ class AgentRuntime:
                 pause_payload = {
                     "step_index": step.index,
                     "tool": tool_name,
+                    "tool_input": tool_input,
                     "resume_step_index": step.index,
+                    "reason": "approval_required",
                     "hint": "call task approve endpoint to resume execution",
                 }
+                pause_payload.update(
+                    self._build_tool_event_payload(
+                        step_index=step.index,
+                        objective=step.objective,
+                        tool_name=tool_name,
+                        tool_input=tool_input,
+                        reason="approval_required",
+                    )
+                )
                 yield RuntimeStreamItem(
                     kind="info",
                     message=self._encode_agent_info(
                         phase="approval_required",
                         payload=pause_payload,
+                        display_message=f"Approval required for tool: {tool_name}",
                     ),
                 )
                 yield RuntimeStreamItem(
@@ -504,6 +565,20 @@ class AgentRuntime:
                 return
             else:
                 tool_call_count += 1
+                yield RuntimeStreamItem(
+                    kind="info",
+                    message=self._encode_agent_info(
+                        phase="tool_started",
+                        payload=self._build_tool_event_payload(
+                            step_index=step.index,
+                            objective=step.objective,
+                            tool_name=tool_name,
+                            tool_input=tool_input,
+                        ),
+                        display_message=f"Tool started: {tool_name}",
+                    ),
+                )
+                tool_started_at = time.time()
                 result = await asyncio.to_thread(
                     self._execute_tool,
                     task_id,
@@ -515,10 +590,42 @@ class AgentRuntime:
                     metadata_map,
                     recalled_memories,
                 )
+                tool_duration_ms = int((time.time() - tool_started_at) * 1000)
                 if result.ok:
                     completed_steps += 1
                     tool_success_count += 1
                     successful_tool_observations.append((tool_name, result.output))
+                    yield RuntimeStreamItem(
+                        kind="info",
+                        message=self._encode_agent_info(
+                            phase="tool_finished",
+                            payload=self._build_tool_event_payload(
+                                step_index=step.index,
+                                objective=step.objective,
+                                tool_name=tool_name,
+                                tool_input=tool_input,
+                                result=result,
+                                duration_ms=tool_duration_ms,
+                            ),
+                            display_message=f"Tool finished: {tool_name}",
+                        ),
+                    )
+                else:
+                    yield RuntimeStreamItem(
+                        kind="info",
+                        message=self._encode_agent_info(
+                            phase="tool_failed",
+                            payload=self._build_tool_event_payload(
+                                step_index=step.index,
+                                objective=step.objective,
+                                tool_name=tool_name,
+                                tool_input=tool_input,
+                                result=result,
+                                duration_ms=tool_duration_ms,
+                            ),
+                            display_message=f"Tool failed: {tool_name}",
+                        ),
+                    )
                 observation = result.output
 
             yield RuntimeStreamItem(
@@ -619,7 +726,7 @@ class AgentRuntime:
                 ),
             )
 
-            # Attempt a shorter direct-generation path before exposing diagnostic fallback.
+            # 暴露诊断兜底前，先尝试更短的直接生成路径。
             try:
                 rescue_chunks: list[str] = []
                 async for chunk in self._run_prompt_with_timeout(
@@ -756,12 +863,73 @@ class AgentRuntime:
 
         return extracted
 
-    def _encode_agent_info(self, phase: str, payload: dict[str, Any]) -> str:
+    def _encode_agent_info(
+        self,
+        phase: str,
+        payload: dict[str, Any],
+        display_message: str = "",
+    ) -> str:
+        # 保留旧版顶层 agent_event/payload 字段，同时增加 schema 标记和
+        # 可选展示文案，供理解标准化工具事件的客户端使用。
         message = {
+            "schema": AGENT_INFO_SCHEMA,
             "agent_event": phase,
             "payload": payload,
         }
+        if display_message.strip():
+            message["display_message"] = display_message.strip()
         return json.dumps(message, ensure_ascii=True, separators=(",", ":"))
+
+    def _build_tool_event_payload(
+        self,
+        step_index: int,
+        objective: str,
+        tool_name: str,
+        tool_input: str,
+        reason: str = "",
+        result: ToolResult | None = None,
+        duration_ms: int | None = None,
+        extra: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        # 标准工具事件 payload。这里有意保留旧版 `tool` 和 `tool_input`
+        # 字段，确保 Gateway 暂停解析和旧前端仍能读取已知值。
+        tool = self._tool_registry.get(tool_name)
+        payload: dict[str, Any] = {
+            "step_index": step_index,
+            "objective": objective,
+            "tool": tool_name,
+            "tool_input": tool_input,
+            "tool_call": {
+                "tool_name": tool_name,
+                "input_text": tool_input,
+                "arguments": self._build_tool_call_arguments(tool_name, tool_input),
+            },
+        }
+
+        if tool is not None:
+            payload["tool_description"] = tool.description
+            payload["risk_level"] = tool.risk_level
+            payload["requires_approval"] = tool.requires_approval
+
+        if reason:
+            payload["reason"] = reason
+        if duration_ms is not None:
+            payload["duration_ms"] = max(0, duration_ms)
+        if result is not None:
+            payload["ok"] = result.ok
+            payload["output"] = result.output
+            payload["output_preview"] = result.output[:600]
+            if result.error is not None:
+                payload["error"] = {
+                    "code": result.error.code,
+                    "message": result.error.message,
+                    "retryable": result.error.retryable,
+                    "details": result.error.details,
+                }
+        if extra:
+            payload.update(extra)
+
+        return payload
 
     def _build_plan_steps(self, prompt: str) -> list[PlannedStep]:
         pieces: list[str] = []
@@ -820,6 +988,11 @@ class AgentRuntime:
 
         if any(token in lowered for token in retrieval_intents):
             return ("retrieval", objective)
+
+        # json_echo 主要用于协议冒烟测试；必须出现明确短语，
+        # 避免普通提示词误选该工具。
+        if "json_echo" in lowered or "json echo" in lowered:
+            return ("json_echo", objective)
 
         url = self._extract_first_url(objective) or self._extract_first_url(prompt)
         if url:
@@ -962,7 +1135,14 @@ class AgentRuntime:
         )
 
         started_at = time.time()
-        result = tool.execute(tool_input, context)
+        # planner 仍返回 (tool_name, plain_text_input)。在 runtime 边界把
+        # 旧形态转换为标准 ToolCall 信封，让具体工具只实现新协议。
+        call = ToolCall(
+            tool_name=tool_name,
+            input_text=tool_input,
+            arguments=self._build_tool_call_arguments(tool_name, tool_input),
+        )
+        result = tool.execute(call, context)
         duration_ms = int((time.time() - started_at) * 1000)
 
         self._tool_audit.log(
@@ -977,6 +1157,22 @@ class AgentRuntime:
         )
 
         return result
+
+    def _build_tool_call_arguments(self, tool_name: str, tool_input: str) -> dict[str, Any]:
+        # 该适配器保留旧 selector 契约，同时为每个内置工具提供其
+        # input_schema 声明的结构化参数键。
+        normalized_name = tool_name.strip().lower()
+        if normalized_name == "calculator":
+            return {"expression": tool_input}
+        if normalized_name in {"browser_fetch", "http_api"}:
+            return {"url": tool_input}
+        if normalized_name == "code_exec":
+            return {"code": tool_input}
+        if normalized_name == "json_echo":
+            return {"payload": tool_input}
+        if normalized_name == "retrieval":
+            return {"query": tool_input}
+        return {"input": tool_input}
 
     def _execute_http_tool(
         self,
@@ -1529,7 +1725,7 @@ class AgentRuntime:
                 for chunk in self._request_openai_stream_with_retry(prompt, metadata):
                     if chunk:
                         push(chunk)
-            except Exception as exc:  # pragma: no cover - runtime safety branch
+            except Exception as exc:  # pragma: no cover - runtime 兜底分支
                 push(exc)
             finally:
                 push(sentinel)
@@ -1813,7 +2009,7 @@ class AgentRuntime:
             except ValueError:
                 pass
 
-        # Linear backoff is enough here and keeps total wait bounded.
+        # 这里线性退避已经足够，并且可以限制总等待时间。
         return min(self._openai_retry_backoff_seconds * attempt, 10.0)
 
     def _build_response(self, prompt: str) -> str:

@@ -42,6 +42,16 @@
     "expect_pause": true
   },
   {
+    "id": "json_echo_protocol",
+    "prompt": "json echo this standard tool protocol smoke payload",
+    "metadata": {
+      "agent_enabled": "true",
+      "auth_user_role": "user",
+      "approval_granted": "true"
+    },
+    "min_success": 0.7
+  },
+  {
     "id": "code_exec_admin",
     "prompt": "run code and evaluate 3 * (4 + 5)",
     "metadata": {

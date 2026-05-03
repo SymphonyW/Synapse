@@ -87,6 +87,13 @@ type StreamEvent = {
 
 type StreamState = 'idle' | 'connecting' | 'live' | 'closed'
 
+type AgentInfoEnvelope = {
+  schema?: string
+  agent_event?: string
+  display_message?: string
+  payload?: Record<string, unknown>
+}
+
 type SessionIdentity = {
   username: string
   role: UserRole
@@ -247,13 +254,21 @@ function formatEventMessage(message?: string): string {
   }
 
   try {
-    const parsed = JSON.parse(normalized) as {
-      agent_event?: string
-      payload?: Record<string, unknown>
-    }
+    const parsed = JSON.parse(normalized) as AgentInfoEnvelope
 
     if (typeof parsed.agent_event !== 'string') {
       return normalized
+    }
+
+    // 标准化 Agent info 事件可以提供 display_message，前端不必解释每个
+    // payload 字段也能保持可读；旧事件没有该字段时继续回退到原有 JSON 展示。
+    if (typeof parsed.display_message === 'string' && parsed.display_message.trim() !== '') {
+      return parsed.display_message.trim()
+    }
+
+    const readableToolMessage = formatAgentToolEvent(parsed.agent_event, parsed.payload)
+    if (readableToolMessage !== '') {
+      return readableToolMessage
     }
 
     const payloadText = parsed.payload ? JSON.stringify(parsed.payload) : ''
@@ -268,6 +283,32 @@ function formatEventMessage(message?: string): string {
 }
 
 // requestJson 统一封装 fetch 与错误解析，保证界面错误提示风格一致。
+function formatAgentToolEvent(
+  agentEvent: string,
+  payload?: Record<string, unknown>,
+): string {
+  const tool = typeof payload?.tool === 'string' ? payload.tool : ''
+  const reason = typeof payload?.reason === 'string' ? payload.reason : ''
+  const suffix = tool !== '' ? `: ${tool}` : ''
+
+  switch (agentEvent) {
+    case 'tool_selected':
+      return `Tool selected${suffix}`
+    case 'tool_started':
+      return `Tool started${suffix}`
+    case 'tool_finished':
+      return `Tool finished${suffix}`
+    case 'tool_failed':
+      return reason !== '' ? `Tool failed${suffix} (${reason})` : `Tool failed${suffix}`
+    case 'approval_required':
+      return `Approval required${suffix}`
+    case 'tool_skipped':
+      return reason !== '' ? `Tool skipped${suffix} (${reason})` : `Tool skipped${suffix}`
+    default:
+      return ''
+  }
+}
+
 async function requestJson<T>(url: string, init?: RequestInit): Promise<T> {
   const response = await fetch(url, {
     ...init,

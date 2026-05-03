@@ -28,6 +28,22 @@ func (noopAgentClient) Health(context.Context) (*agentv1.HealthResponse, error) 
 	return &agentv1.HealthResponse{Status: "ok", ModelProvider: "test"}, nil
 }
 
+func (noopAgentClient) MemoryWrite(context.Context, *agentv1.MemoryWriteRequest) (*agentv1.MemoryWriteResponse, error) {
+	return &agentv1.MemoryWriteResponse{}, nil
+}
+
+func (noopAgentClient) MemoryRecall(context.Context, *agentv1.MemoryRecallRequest) (*agentv1.MemoryRecallResponse, error) {
+	return &agentv1.MemoryRecallResponse{}, nil
+}
+
+func (noopAgentClient) MemoryDelete(context.Context, *agentv1.MemoryDeleteRequest) (*agentv1.MemoryDeleteResponse, error) {
+	return &agentv1.MemoryDeleteResponse{}, nil
+}
+
+func (noopAgentClient) MemoryList(context.Context, *agentv1.MemoryListRequest) (*agentv1.MemoryListResponse, error) {
+	return &agentv1.MemoryListResponse{}, nil
+}
+
 func (noopAgentClient) Close() error {
 	return nil
 }

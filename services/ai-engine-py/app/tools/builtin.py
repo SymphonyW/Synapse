@@ -45,6 +45,11 @@ class RetrievalTool(BaseAgentTool):
             preview = str(item.get("final_response_preview", "")).strip()
             if preview:
                 highlights.append(preview)
+                continue
+
+            content = str(item.get("content", "")).strip()
+            if content:
+                highlights.append(content[:220])
 
         if not highlights:
             highlights = ["retrieval completed but records are empty"]

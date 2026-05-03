@@ -8,7 +8,7 @@
       "approval_granted": "true"
     },
     "min_success": 0.7,
-    "required_events": ["tool_finished"],
+    "required_events": ["memory_recall", "tool_finished"],
     "required_tools": ["calculator"]
   },
   {
@@ -21,7 +21,7 @@
       "model_messages_json": "[{\"role\":\"user\",\"content\":\"we discussed gateway retries\"},{\"role\":\"assistant\",\"content\":\"retry on retryable upstream failures\"}]"
     },
     "min_success": 0.65,
-    "required_events": ["tool_finished"],
+    "required_events": ["memory_recall", "tool_finished"],
     "required_tools": ["retrieval"]
   },
   {

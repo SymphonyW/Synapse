@@ -34,6 +34,22 @@ func (f *fakeAgentClient) Health(ctx context.Context) (*agentv1.HealthResponse, 
 	return f.health(ctx)
 }
 
+func (f *fakeAgentClient) MemoryWrite(context.Context, *agentv1.MemoryWriteRequest) (*agentv1.MemoryWriteResponse, error) {
+	return &agentv1.MemoryWriteResponse{}, nil
+}
+
+func (f *fakeAgentClient) MemoryRecall(context.Context, *agentv1.MemoryRecallRequest) (*agentv1.MemoryRecallResponse, error) {
+	return &agentv1.MemoryRecallResponse{}, nil
+}
+
+func (f *fakeAgentClient) MemoryDelete(context.Context, *agentv1.MemoryDeleteRequest) (*agentv1.MemoryDeleteResponse, error) {
+	return &agentv1.MemoryDeleteResponse{}, nil
+}
+
+func (f *fakeAgentClient) MemoryList(context.Context, *agentv1.MemoryListRequest) (*agentv1.MemoryListResponse, error) {
+	return &agentv1.MemoryListResponse{}, nil
+}
+
 func (f *fakeAgentClient) Close() error {
 	return nil
 }

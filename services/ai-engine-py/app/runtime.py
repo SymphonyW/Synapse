@@ -2,7 +2,6 @@ import asyncio
 import ast
 import html
 import json
-import pathlib
 import re
 import socket
 import threading
@@ -13,6 +12,7 @@ from urllib import error as urllib_error
 from urllib import parse as urllib_parse
 from urllib import request as urllib_request
 
+from app.memory import FileMemoryStore, MemoryRecord, MemoryStore
 from app.tools import (
     ToolAuditLogger,
     ToolCall,
@@ -116,141 +116,6 @@ class BrowserDocument:
     truncated: bool
 
 
-class AgentMemoryStore:
-    """按用户 ID 分组的简单文件型长期记忆存储。"""
-
-    def __init__(self, file_path: str, max_entries_per_user: int) -> None:
-        self._path = pathlib.Path(file_path).expanduser() if file_path.strip() else None
-        self._max_entries_per_user = max(1, max_entries_per_user)
-        self._lock = threading.Lock()
-
-    def recall(self, user_id: str, query: str, limit: int) -> list[dict[str, Any]]:
-        if self._path is None:
-            return []
-
-        normalized_user_id = user_id.strip().lower()
-        if not normalized_user_id:
-            return []
-
-        normalized_limit = max(0, limit)
-        if normalized_limit == 0:
-            return []
-
-        with self._lock:
-            document = self._load_document()
-
-        records = document.get("users", {}).get(normalized_user_id, [])
-        if not isinstance(records, list):
-            return []
-
-        query_tokens = self._tokenize(query)
-        scored: list[tuple[int, int, dict[str, Any]]] = []
-        for item in records:
-            if not isinstance(item, dict):
-                continue
-
-            content = " ".join(
-                [
-                    str(item.get("prompt", "")),
-                    str(item.get("summary", "")),
-                    str(item.get("final_response_preview", "")),
-                ]
-            )
-            overlap = len(self._tokenize(content).intersection(query_tokens))
-            created_at = int(item.get("created_at_unix_ms", 0) or 0)
-            scored.append((overlap, created_at, item))
-
-        scored.sort(key=lambda value: (value[0], value[1]), reverse=True)
-
-        selected: list[dict[str, Any]] = []
-        for overlap, _, record in scored:
-            if overlap <= 0 and selected:
-                break
-            selected.append(record)
-            if len(selected) >= normalized_limit:
-                break
-
-        if selected:
-            return selected
-
-        # 没有词面命中时，返回最近记忆作为兜底上下文。
-        latest = sorted(
-            (item for item in records if isinstance(item, dict)),
-            key=lambda value: int(value.get("created_at_unix_ms", 0) or 0),
-            reverse=True,
-        )
-        return latest[:normalized_limit]
-
-    def append(
-        self,
-        user_id: str,
-        prompt: str,
-        summary: str,
-        final_response_preview: str,
-        estimated_success: float,
-        created_at_unix_ms: int,
-    ) -> None:
-        if self._path is None:
-            return
-
-        normalized_user_id = user_id.strip().lower()
-        if not normalized_user_id:
-            return
-
-        record = {
-            "prompt": prompt.strip(),
-            "summary": summary.strip(),
-            "final_response_preview": final_response_preview.strip(),
-            "estimated_success": round(max(0.0, min(1.0, estimated_success)), 3),
-            "created_at_unix_ms": int(created_at_unix_ms),
-        }
-
-        with self._lock:
-            document = self._load_document()
-            users = document.setdefault("users", {})
-            if not isinstance(users, dict):
-                users = {}
-                document["users"] = users
-
-            history = users.setdefault(normalized_user_id, [])
-            if not isinstance(history, list):
-                history = []
-
-            history.append(record)
-            users[normalized_user_id] = history[-self._max_entries_per_user :]
-
-            self._save_document(document)
-
-    def _load_document(self) -> dict[str, Any]:
-        if self._path is None or not self._path.exists():
-            return {"version": 1, "users": {}}
-
-        try:
-            raw = self._path.read_text(encoding="utf-8")
-            decoded = json.loads(raw)
-            if isinstance(decoded, dict):
-                return decoded
-        except Exception:
-            pass
-
-        return {"version": 1, "users": {}}
-
-    def _save_document(self, document: dict[str, Any]) -> None:
-        if self._path is None:
-            return
-
-        self._path.parent.mkdir(parents=True, exist_ok=True)
-        serialized = json.dumps(document, ensure_ascii=True, separators=(",", ":"))
-        self._path.write_text(serialized, encoding="utf-8")
-
-    def _tokenize(self, text: str) -> set[str]:
-        normalized = text.strip().lower()
-        if not normalized:
-            return set()
-
-        return set(re.findall(r"[a-z0-9_]+|[\u4e00-\u9fff]+", normalized))
-
-
 class AgentRuntime:
     """面向 provider 的运行时，按提示词生成 token 流。"""
 
@@ -306,7 +171,7 @@ class AgentRuntime:
         self._agent_max_plan_steps = max(1, agent_max_plan_steps)
         self._agent_require_approval_for_high_risk = agent_require_approval_for_high_risk
         self._agent_memory_recall_limit = max(1, agent_memory_recall_limit)
-        self._agent_memory_store = AgentMemoryStore(
+        self._agent_memory_store: MemoryStore = FileMemoryStore(
             file_path=agent_memory_file,
             max_entries_per_user=agent_memory_max_entries_per_user,
         )
@@ -426,9 +291,10 @@ class AgentRuntime:
 
         short_context = self._extract_short_context(metadata_map)
         context_url = self._extract_latest_context_url(normalized_prompt, metadata_map)
-        recalled_memories = self._agent_memory_store.recall(
+        memory_hits = self._agent_memory_store.memory_recall(
             normalized_user_id, normalized_prompt, self._agent_memory_recall_limit
         )
+        recalled_memories = [hit.to_dict() for hit in memory_hits]
 
         yield RuntimeStreamItem(
             kind="info",
@@ -439,6 +305,30 @@ class AgentRuntime:
                     "short_context_count": len(short_context),
                     "recalled_memory_count": len(recalled_memories),
                 },
+            ),
+        )
+        yield RuntimeStreamItem(
+            kind="info",
+            message=self._encode_agent_info(
+                phase="memory_recall",
+                payload={
+                    "query": normalized_prompt[:240],
+                    "hit_count": len(recalled_memories),
+                    "hits": [
+                        {
+                            "memory_id": item.get("memory_id", ""),
+                            "summary": str(item.get("summary", ""))[:240],
+                            "content_preview": str(item.get("content", ""))[:240],
+                            "source_task_id": item.get("source_task_id", ""),
+                            "importance": item.get("importance", 0.0),
+                            "created_at": item.get("created_at", 0),
+                            "score": item.get("score", 0.0),
+                            "matched_terms": item.get("matched_terms", []),
+                        }
+                        for item in recalled_memories
+                    ],
+                },
+                display_message=f"Memory recall: {len(recalled_memories)} hit(s)",
             ),
         )
 
@@ -753,14 +643,34 @@ class AgentRuntime:
             metadata_map.get(METADATA_MEMORY_WRITE_ENABLED_KEY), default_value=True
         )
         if memory_write_enabled:
-            self._agent_memory_store.append(
-                user_id=normalized_user_id,
-                prompt=normalized_prompt,
-                summary=" | ".join(step_summaries[-3:]),
-                final_response_preview=final_response[:400],
-                estimated_success=evaluation.estimated_success,
-                created_at_unix_ms=int(time.time() * 1000),
+            written_memory = self._agent_memory_store.memory_write(
+                MemoryRecord(
+                    memory_id="",
+                    user_id=normalized_user_id,
+                    content=self._build_memory_content(normalized_prompt, final_response),
+                    summary=" | ".join(step_summaries[-3:]),
+                    source_task_id=task_id,
+                    importance=evaluation.estimated_success,
+                    created_at=int(time.time() * 1000),
+                )
             )
+            if written_memory is not None:
+                yield RuntimeStreamItem(
+                    kind="info",
+                    message=self._encode_agent_info(
+                        phase="memory_write",
+                        payload={
+                            "memory_id": written_memory.memory_id,
+                            "user_id": written_memory.user_id,
+                            "summary": written_memory.summary[:240],
+                            "content_preview": written_memory.content[:240],
+                            "source_task_id": written_memory.source_task_id,
+                            "importance": written_memory.importance,
+                            "created_at": written_memory.created_at,
+                        },
+                        display_message="Memory written",
+                    ),
+                )
 
         elapsed_ms = int((time.time() - started_at) * 1000)
         yield RuntimeStreamItem(
@@ -776,6 +686,53 @@ class AgentRuntime:
                 },
             ),
         )
+
+    def memory_write(
+        self,
+        user_id: str,
+        content: str,
+        summary: str,
+        source_task_id: str,
+        importance: float,
+    ) -> dict[str, Any] | None:
+        written = self._agent_memory_store.memory_write(
+            MemoryRecord(
+                memory_id="",
+                user_id=user_id,
+                content=content,
+                summary=summary,
+                source_task_id=source_task_id,
+                importance=importance,
+                created_at=int(time.time() * 1000),
+            )
+        )
+        if written is None:
+            return None
+        return written.to_dict()
+
+    def memory_recall(self, user_id: str, query: str, limit: int) -> list[dict[str, Any]]:
+        return [
+            hit.to_dict()
+            for hit in self._agent_memory_store.memory_recall(user_id, query, limit)
+        ]
+
+    def memory_delete(self, user_id: str, memory_id: str) -> bool:
+        return self._agent_memory_store.memory_delete(user_id, memory_id)
+
+    def memory_list(self, user_id: str, limit: int) -> list[dict[str, Any]]:
+        return [
+            record.to_dict()
+            for record in self._agent_memory_store.memory_list(user_id, limit)
+        ]
+
+    def _build_memory_content(self, prompt: str, final_response: str) -> str:
+        # 自动写入时保留用户请求和最终回复，summary 负责短摘要，content 负责后续召回的完整上下文。
+        parts = []
+        if prompt.strip():
+            parts.append(f"User request: {prompt.strip()}")
+        if final_response.strip():
+            parts.append(f"Assistant response: {final_response.strip()[:1200]}")
+        return "\n".join(parts)
 
     def _is_agent_enabled(self, metadata: dict[str, str]) -> bool:
         return self._read_bool(
@@ -2279,6 +2236,8 @@ class AgentRuntime:
                 summary = str(item.get("summary", "")).strip()
                 if not summary:
                     summary = str(item.get("final_response_preview", "")).strip()
+                if not summary:
+                    summary = str(item.get("content", "")).strip()
                 if summary:
                     lines.append(f"- {summary[:220]}")
 

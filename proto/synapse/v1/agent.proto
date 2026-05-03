@@ -40,8 +40,70 @@ message AgentEvent {
   int64 emitted_at_unix_ms = 5;
 }
 
-// 运行时服务：提供健康检查与任务流式执行。
+// 长期记忆记录，和 AI Engine 内部 MemoryStore 结构保持同名字段。
+message MemoryRecord {
+  string memory_id = 1;
+  string user_id = 2;
+  string content = 3;
+  string summary = 4;
+  string source_task_id = 5;
+  double importance = 6;
+  int64 created_at = 7;
+}
+
+// 召回结果在记录之外附带当前查询的匹配分数和命中词。
+message MemoryRecallHit {
+  MemoryRecord record = 1;
+  double score = 2;
+  repeated string matched_terms = 3;
+}
+
+message MemoryWriteRequest {
+  string user_id = 1;
+  string content = 2;
+  string summary = 3;
+  string source_task_id = 4;
+  double importance = 5;
+}
+
+message MemoryWriteResponse {
+  MemoryRecord record = 1;
+}
+
+message MemoryRecallRequest {
+  string user_id = 1;
+  string query = 2;
+  int32 limit = 3;
+}
+
+message MemoryRecallResponse {
+  repeated MemoryRecallHit hits = 1;
+}
+
+message MemoryDeleteRequest {
+  string user_id = 1;
+  string memory_id = 2;
+}
+
+message MemoryDeleteResponse {
+  bool deleted = 1;
+}
+
+message MemoryListRequest {
+  string user_id = 1;
+  int32 limit = 2;
+}
+
+message MemoryListResponse {
+  repeated MemoryRecord items = 1;
+}
+
+// 运行时服务：提供健康检查、任务流式执行与长期记忆管理。
 service AgentRuntime {
   rpc Health(HealthRequest) returns (HealthResponse);
   rpc SubmitTask(SubmitTaskRequest) returns (stream AgentEvent);
+  rpc MemoryWrite(MemoryWriteRequest) returns (MemoryWriteResponse);
+  rpc MemoryRecall(MemoryRecallRequest) returns (MemoryRecallResponse);
+  rpc MemoryDelete(MemoryDeleteRequest) returns (MemoryDeleteResponse);
+  rpc MemoryList(MemoryListRequest) returns (MemoryListResponse);
 }

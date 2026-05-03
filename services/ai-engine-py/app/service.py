@@ -18,6 +18,51 @@ class AgentRuntimeService(agent_pb2_grpc.AgentRuntimeServicer):
             status="ok", model_provider=self._runtime.model_provider_display
         )
 
+    async def MemoryWrite(
+        self, request: agent_pb2.MemoryWriteRequest, context
+    ) -> agent_pb2.MemoryWriteResponse:
+        # 管理 API 走同一个 MemoryStore，避免手工写入和 Agent 自动写入出现两套文件格式。
+        record = self._runtime.memory_write(
+            user_id=request.user_id,
+            content=request.content,
+            summary=request.summary,
+            source_task_id=request.source_task_id,
+            importance=request.importance,
+        )
+        return agent_pb2.MemoryWriteResponse(record=_memory_record_to_proto(record or {}))
+
+    async def MemoryRecall(
+        self, request: agent_pb2.MemoryRecallRequest, context
+    ) -> agent_pb2.MemoryRecallResponse:
+        hits = self._runtime.memory_recall(
+            user_id=request.user_id,
+            query=request.query,
+            limit=request.limit,
+        )
+        return agent_pb2.MemoryRecallResponse(
+            hits=[_memory_hit_to_proto(hit) for hit in hits]
+        )
+
+    async def MemoryDelete(
+        self, request: agent_pb2.MemoryDeleteRequest, context
+    ) -> agent_pb2.MemoryDeleteResponse:
+        deleted = self._runtime.memory_delete(
+            user_id=request.user_id,
+            memory_id=request.memory_id,
+        )
+        return agent_pb2.MemoryDeleteResponse(deleted=deleted)
+
+    async def MemoryList(
+        self, request: agent_pb2.MemoryListRequest, context
+    ) -> agent_pb2.MemoryListResponse:
+        items = self._runtime.memory_list(
+            user_id=request.user_id,
+            limit=request.limit,
+        )
+        return agent_pb2.MemoryListResponse(
+            items=[_memory_record_to_proto(item) for item in items]
+        )
+
     async def SubmitTask(
         self, request: agent_pb2.SubmitTaskRequest, context
     ) -> AsyncIterator[agent_pb2.AgentEvent]:
@@ -88,3 +133,23 @@ class AgentRuntimeService(agent_pb2_grpc.AgentRuntimeServicer):
                 trace_id=trace_id,
                 emitted_at_unix_ms=int(time.time() * 1000),
             )
+
+
+def _memory_record_to_proto(record: dict) -> agent_pb2.MemoryRecord:
+    return agent_pb2.MemoryRecord(
+        memory_id=str(record.get("memory_id", "")),
+        user_id=str(record.get("user_id", "")),
+        content=str(record.get("content", "")),
+        summary=str(record.get("summary", "")),
+        source_task_id=str(record.get("source_task_id", "")),
+        importance=float(record.get("importance", 0.0) or 0.0),
+        created_at=int(record.get("created_at", 0) or 0),
+    )
+
+
+def _memory_hit_to_proto(hit: dict) -> agent_pb2.MemoryRecallHit:
+    return agent_pb2.MemoryRecallHit(
+        record=_memory_record_to_proto(hit),
+        score=float(hit.get("score", 0.0) or 0.0),
+        matched_terms=[str(item) for item in hit.get("matched_terms", [])],
+    )

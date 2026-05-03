@@ -3,6 +3,7 @@ import json
 import os
 import pathlib
 import statistics
+import tempfile
 import time
 from dataclasses import dataclass
 from typing import Any
@@ -200,19 +201,28 @@ async def _run_case(runtime: AgentRuntime, case: BenchmarkCase, task_index: int)
 
 
 async def _run_all(cases: list[BenchmarkCase]) -> dict[str, Any]:
-    runtime = AgentRuntime(
-        model_provider="mock",
-        agent_memory_file="",
-        agent_enable_code_execution=True,
-        agent_tool_http_allowlist=("example.com",),
-        agent_tool_policy_json=os.getenv("SYNAPSE_AGENT_TOOL_POLICY_JSON", ""),
-        agent_tool_audit_log_file="",
-    )
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        memory_file = pathlib.Path(tmp_dir) / "regression-memory.json"
+        runtime = AgentRuntime(
+            model_provider="mock",
+            agent_memory_file=str(memory_file),
+            agent_enable_code_execution=True,
+            agent_tool_http_allowlist=("example.com",),
+            agent_tool_policy_json=os.getenv("SYNAPSE_AGENT_TOOL_POLICY_JSON", ""),
+            agent_tool_audit_log_file="",
+        )
+        runtime.memory_write(
+            user_id="benchmark-user",
+            content="Gateway retries should be bounded and retryable upstream failures are audited.",
+            summary="retry on retryable upstream failures",
+            source_task_id="regression-seed-memory",
+            importance=0.9,
+        )
 
-    results: list[BenchmarkResult] = []
-    for index, case in enumerate(cases):
-        result = await _run_case(runtime, case, index)
-        results.append(result)
+        results: list[BenchmarkResult] = []
+        for index, case in enumerate(cases):
+            result = await _run_case(runtime, case, index)
+            results.append(result)
 
     total = len(results)
     passed_count = sum(1 for item in results if item.passed)

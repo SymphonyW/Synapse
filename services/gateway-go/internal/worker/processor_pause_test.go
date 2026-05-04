@@ -23,7 +23,7 @@ func TestProcessWithRetryPausesTaskOnApprovalRequired(t *testing.T) {
 				{Type: agentv1.AgentEventType_AGENT_EVENT_TYPE_STARTED, Message: "task started", EmittedAtUnixMs: now},
 				{
 					Type:            agentv1.AgentEventType_AGENT_EVENT_TYPE_INFO,
-					Message:         `{"agent_event":"approval_required","payload":{"resume_step_index":2,"tool":"http_api"}}`,
+					Message:         `{"agent_event":"approval_required","payload":{"resume_step_index":2,"tool":"http_api","tool_input":"https://example.com/api","risk_level":"high","approval_reason":"external api requires approval"}}`,
 					EmittedAtUnixMs: now + 1,
 				},
 			}), nil
@@ -49,6 +49,15 @@ func TestProcessWithRetryPausesTaskOnApprovalRequired(t *testing.T) {
 	}
 	if task.Metadata[metadataAgentRequiredToolKey] != "http_api" {
 		t.Fatalf("unexpected required tool metadata: got %q", task.Metadata[metadataAgentRequiredToolKey])
+	}
+	if task.Metadata[metadataAgentRequiredToolInputKey] != "https://example.com/api" {
+		t.Fatalf("unexpected required tool input metadata: got %q", task.Metadata[metadataAgentRequiredToolInputKey])
+	}
+	if task.Metadata[metadataAgentRequiredToolRiskKey] != "high" {
+		t.Fatalf("unexpected required tool risk metadata: got %q", task.Metadata[metadataAgentRequiredToolRiskKey])
+	}
+	if task.Metadata[metadataAgentRequiredReasonKey] != "external api requires approval" {
+		t.Fatalf("unexpected required reason metadata: got %q", task.Metadata[metadataAgentRequiredReasonKey])
 	}
 	if task.Metadata[metadataApprovalGrantedKey] != "false" {
 		t.Fatalf("unexpected approval flag metadata: got %q", task.Metadata[metadataApprovalGrantedKey])

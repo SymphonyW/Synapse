@@ -1,5 +1,7 @@
 import asyncio
 import json
+import pathlib
+import tempfile
 import unittest
 from typing import Any
 
@@ -79,6 +81,24 @@ async def _collect_runtime_infos(
 
 def _agent_events(infos: list[dict[str, Any]]) -> list[str]:
     return [str(item.get("agent_event", "")) for item in infos]
+
+
+def _approved_tool_call(
+    tool_name: str,
+    tool_input: str,
+    risk_level: str = "high",
+    resume_step_index: int = 1,
+) -> str:
+    # 测试统一用 Gateway 写入 metadata 的 JSON 字符串格式，避免每个用例重复拼接字段。
+    return json.dumps(
+        {
+            "tool_name": tool_name,
+            "tool_input": tool_input,
+            "risk_level": risk_level,
+            "reason": "unit test approval",
+            "resume_step_index": resume_step_index,
+        }
+    )
 
 
 class ToolProtocolTests(unittest.TestCase):
@@ -298,8 +318,135 @@ class ToolProtocolTests(unittest.TestCase):
 
         self.assertEqual(approval["schema"], "synapse.agent.info.v1")
         self.assertEqual(approval["payload"]["tool"], "summarize_page")
+        self.assertEqual(approval["payload"]["tool_input"], "https://example.com")
+        self.assertEqual(approval["payload"]["risk_level"], "high")
         self.assertEqual(approval["payload"]["resume_step_index"], 1)
         self.assertEqual(approval["payload"]["reason"], "approval_required")
+        approval_record = approval["payload"]["approved_tool_call"]
+        self.assertEqual(approval_record["tool_name"], "summarize_page")
+        self.assertEqual(approval_record["tool_input"], "https://example.com")
+        self.assertEqual(approval_record["risk_level"], "high")
+        self.assertEqual(approval_record["resume_step_index"], 1)
+
+    def test_runtime_approves_exact_tool_call_only(self) -> None:
+        # approval_granted 只表示任务正在恢复；真正执行高风险工具时，
+        # approved_tool_call 必须和 planner 当前选出的工具名、输入、风险和步骤匹配。
+        runtime = AgentRuntime(
+            model_provider="mock",
+            agent_enable_code_execution=True,
+            agent_tool_audit_log_file="",
+        )
+
+        exact_infos = asyncio.run(
+            _collect_runtime_infos(
+                runtime,
+                "run code 3 * 9",
+                {
+                    "auth_user_role": "admin",
+                    "approval_granted": "true",
+                    "approved_tool_call": _approved_tool_call("code_exec", "3 * 9"),
+                },
+            )
+        )
+        exact_phases = _agent_events(exact_infos)
+
+        self.assertNotIn("approval_required", exact_phases)
+        self.assertIn("tool_finished", exact_phases)
+        tool_finished = next(item for item in exact_infos if item["agent_event"] == "tool_finished")
+        self.assertEqual(tool_finished["payload"]["tool"], "code_exec")
+        self.assertIn("27", tool_finished["payload"]["output"])
+
+        mismatched_infos = asyncio.run(
+            _collect_runtime_infos(
+                runtime,
+                "run code 3 * 9",
+                {
+                    "auth_user_role": "admin",
+                    "approval_granted": "true",
+                    "approved_tool_call": _approved_tool_call("code_exec", "4 * 9"),
+                },
+            )
+        )
+        mismatched_phases = _agent_events(mismatched_infos)
+
+        self.assertIn("approval_required", mismatched_phases)
+        self.assertNotIn("tool_started", mismatched_phases)
+
+    def test_tool_audit_records_governance_actions(self) -> None:
+        # 审计日志需要覆盖治理全链路：策略阻断、等待审批、审批通过、执行成功和执行失败。
+        with tempfile.TemporaryDirectory() as temp_dir:
+            audit_path = pathlib.Path(temp_dir) / "tool-audit.jsonl"
+
+            blocked_runtime = AgentRuntime(
+                model_provider="mock",
+                agent_tool_audit_log_file=str(audit_path),
+            )
+            asyncio.run(
+                _collect_runtime_infos(
+                    blocked_runtime,
+                    "run code 3 * 9",
+                    {"auth_user_role": "user"},
+                )
+            )
+
+            pending_runtime = AgentRuntime(
+                model_provider="mock",
+                agent_enable_code_execution=True,
+                agent_tool_audit_log_file=str(audit_path),
+            )
+            asyncio.run(
+                _collect_runtime_infos(
+                    pending_runtime,
+                    "run code 3 * 9",
+                    {"auth_user_role": "admin"},
+                )
+            )
+
+            executed_runtime = AgentRuntime(
+                model_provider="mock",
+                agent_enable_code_execution=True,
+                agent_tool_audit_log_file=str(audit_path),
+            )
+            asyncio.run(
+                _collect_runtime_infos(
+                    executed_runtime,
+                    "run code 3 * 9",
+                    {
+                        "auth_user_role": "admin",
+                        "approved_tool_call": _approved_tool_call("code_exec", "3 * 9"),
+                    },
+                )
+            )
+
+            failed_runtime = AgentRuntime(
+                model_provider="mock",
+                agent_enable_code_execution=False,
+                agent_tool_audit_log_file=str(audit_path),
+            )
+            asyncio.run(
+                _collect_runtime_infos(
+                    failed_runtime,
+                    "run code 3 * 9",
+                    {
+                        "auth_user_role": "admin",
+                        "approved_tool_call": _approved_tool_call("code_exec", "3 * 9"),
+                    },
+                )
+            )
+
+            entries = [
+                json.loads(line)
+                for line in audit_path.read_text(encoding="utf-8").splitlines()
+                if line.strip()
+            ]
+            actions = {entry["action"] for entry in entries}
+
+            self.assertTrue(
+                {"blocked", "approval_required", "approved", "executed", "failed"}.issubset(actions)
+            )
+            approval_entry = next(entry for entry in entries if entry["action"] == "approval_required")
+            self.assertEqual(approval_entry["risk_level"], "high")
+            self.assertEqual(approval_entry["details"]["resume_step_index"], 1)
 
     def test_browser_runtime_search_and_allowlist_errors_are_structured(self) -> None:
         # search 当前不依赖外部搜索服务；先把查询里的 URL 标准化为来源候选，保证 mock regression 稳定。
@@ -347,7 +494,11 @@ class ToolProtocolTests(unittest.TestCase):
             _collect_runtime_infos(
                 runtime,
                 "run code 3 * 9",
-                {"auth_user_role": "admin", "approval_granted": "true"},
+                {
+                    "auth_user_role": "admin",
+                    "approval_granted": "true",
+                    "approved_tool_call": _approved_tool_call("code_exec", "3 * 9"),
+                },
             )
         )
         phases = _agent_events(infos)

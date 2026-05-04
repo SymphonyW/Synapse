@@ -28,6 +28,7 @@ MODEL_MESSAGES_METADATA_KEY = "model_messages_json"
 METADATA_AGENT_ENABLED_KEY = "agent_enabled"
 METADATA_APPROVAL_GRANTED_KEY = "approval_granted"
 METADATA_APPROVED_TOOLS_KEY = "approved_tools"
+METADATA_APPROVED_TOOL_CALL_KEY = "approved_tool_call"
 METADATA_AUTH_USER_ROLE_KEY = "auth_user_role"
 METADATA_AUTH_USERNAME_KEY = "auth_username"
 METADATA_MEMORY_WRITE_ENABLED_KEY = "memory_write_enabled"
@@ -283,6 +284,7 @@ class AgentRuntime:
             metadata_map.get(METADATA_APPROVAL_GRANTED_KEY), default_value=False
         )
         approved_tools = self._parse_csv_set(metadata_map.get(METADATA_APPROVED_TOOLS_KEY, ""))
+        approved_tool_call = self._parse_approved_tool_call(metadata_map)
         resume_step_index = self._read_int(
             metadata_map.get(METADATA_AGENT_RESUME_STEP_KEY), default_value=1
         )
@@ -412,6 +414,7 @@ class AgentRuntime:
                 recalled_memories=recalled_memories,
                 approval_granted=approval_granted,
                 approved_tools=approved_tools,
+                approved_tool_call=approved_tool_call,
                 outcome_box=outcome_box,
             ):
                 yield executor_event
@@ -486,6 +489,7 @@ class AgentRuntime:
                 recalled_memories=recalled_memories,
                 approval_granted=approval_granted,
                 approved_tools=approved_tools,
+                approved_tool_call=approved_tool_call,
                 outcome_box=replan_outcome_box,
             ):
                 yield executor_event
@@ -970,6 +974,7 @@ class AgentRuntime:
         recalled_memories: list[dict[str, Any]],
         approval_granted: bool,
         approved_tools: set[str],
+        approved_tool_call: dict[str, Any] | None,
         outcome_box: dict[str, ToolExecutionOutcome],
     ) -> AsyncIterator[RuntimeStreamItem]:
         # executor 只负责应用策略护栏并调用工具；失败会变成 outcome，
@@ -1010,6 +1015,8 @@ class AgentRuntime:
                 ok=False,
                 duration_ms=0,
                 reason="policy_blocked",
+                action="blocked",
+                risk_level=self._tool_risk_level(decision.tool_name),
             )
             outcome = ToolExecutionOutcome(
                 status="skipped",
@@ -1046,9 +1053,16 @@ class AgentRuntime:
             )
             return
 
-        if self._tool_requires_approval(decision.tool_name) and not (
-            approval_granted or decision.tool_name in approved_tools
-        ):
+        tool_risk_level = self._tool_risk_level(decision.tool_name)
+        is_approved, approval_source = self._is_tool_call_approved(
+            decision=decision,
+            approved_tools=approved_tools,
+            approved_tool_call=approved_tool_call,
+        )
+        # approval_granted 仍由 Gateway 写入，便于旧链路识别“这是一条恢复任务”，
+        # 但真正放行必须匹配 approved_tool_call 或旧的 approved_tools，避免仅靠布尔值放行高风险工具。
+        _ = approval_granted
+        if self._tool_requires_approval(decision.tool_name) and not is_approved:
             observation = f"tool {decision.tool_name} requires explicit approval"
             self._tool_audit.log(
                 task_id=task_id,
@@ -1060,6 +1074,12 @@ class AgentRuntime:
                 ok=False,
                 duration_ms=0,
                 reason="approval_required",
+                action="approval_required",
+                risk_level=tool_risk_level,
+                details={
+                    "resume_step_index": decision.step_index,
+                    "approval_record": self._build_approval_record(decision, tool_risk_level),
+                },
             )
             outcome = ToolExecutionOutcome(
                 status="approval_required",
@@ -1072,9 +1092,13 @@ class AgentRuntime:
             pause_payload = {
                 "step_index": decision.step_index,
                 "tool": decision.tool_name,
+                "tool_name": decision.tool_name,
                 "tool_input": decision.tool_input,
+                "risk_level": tool_risk_level,
                 "resume_step_index": decision.step_index,
                 "reason": outcome.reason,
+                "approval_reason": f"{tool_risk_level} risk tool call requires approval",
+                "approved_tool_call": self._build_approval_record(decision, tool_risk_level),
                 "hint": "call task approve endpoint to resume execution",
             }
             pause_payload.update(
@@ -1106,6 +1130,25 @@ class AgentRuntime:
                 ),
             )
             return
+
+        if self._tool_requires_approval(decision.tool_name):
+            self._tool_audit.log(
+                task_id=task_id,
+                user_id=user_id,
+                user_role=user_role,
+                tool_name=decision.tool_name,
+                tool_input=decision.tool_input,
+                outcome=f"tool call approved by {approval_source}",
+                ok=True,
+                duration_ms=0,
+                reason="approved",
+                action="approved",
+                risk_level=tool_risk_level,
+                details={
+                    "resume_step_index": decision.step_index,
+                    "approval_source": approval_source,
+                },
+            )
 
         yield RuntimeStreamItem(
             kind="info",
@@ -1449,6 +1492,89 @@ class AgentRuntime:
     def _tool_requires_approval(self, tool_name: str) -> bool:
         return self._tool_policy.requires_approval(tool_name)
 
+    def _tool_risk_level(self, tool_name: str) -> str:
+        tool = self._tool_registry.get(tool_name)
+        if tool is None:
+            return ""
+        return str(getattr(tool, "risk_level", "") or "")
+
+    def _build_approval_record(
+        self,
+        decision: PlannerDecision,
+        risk_level: str,
+    ) -> dict[str, Any]:
+        # 审批记录绑定到一次具体 tool call，而不是只绑定工具名，避免恢复时放行同名不同参数的调用。
+        return {
+            "tool_name": decision.tool_name,
+            "tool_input": decision.tool_input,
+            "risk_level": risk_level,
+            "reason": f"{risk_level} risk tool call requires approval",
+            "resume_step_index": decision.step_index,
+        }
+
+    def _parse_approved_tool_call(self, metadata: dict[str, str]) -> dict[str, Any] | None:
+        # Gateway 将审批记录作为 JSON 字符串写入 metadata；runtime 在入口处解析一次，
+        # 执行阶段只做结构化字段比对，避免每个工具重复处理元数据格式。
+        raw = metadata.get(METADATA_APPROVED_TOOL_CALL_KEY, "").strip()
+        if not raw:
+            return None
+
+        try:
+            decoded = json.loads(raw)
+        except json.JSONDecodeError:
+            return None
+        if not isinstance(decoded, dict):
+            return None
+
+        tool_name = str(decoded.get("tool_name", decoded.get("tool", ""))).strip().lower()
+        tool_input = str(decoded.get("tool_input", "")).strip()
+        risk_level = str(decoded.get("risk_level", "")).strip().lower()
+        reason = str(decoded.get("reason", "")).strip()
+        resume_step_index = self._read_int(str(decoded.get("resume_step_index", "")), 0)
+        if not tool_name:
+            return None
+
+        return {
+            "tool_name": tool_name,
+            "tool_input": tool_input,
+            "risk_level": risk_level,
+            "reason": reason,
+            "resume_step_index": resume_step_index,
+        }
+
+    def _is_tool_call_approved(
+        self,
+        decision: PlannerDecision,
+        approved_tools: set[str],
+        approved_tool_call: dict[str, Any] | None,
+    ) -> tuple[bool, str]:
+        # approved_tools 保留旧的工具名级别审批；approved_tool_call 是新的精确审批路径。
+        if decision.tool_name in approved_tools:
+            return True, "approved_tools"
+        if approved_tool_call is None:
+            return False, ""
+
+        if str(approved_tool_call.get("tool_name", "")).strip().lower() != decision.tool_name:
+            return False, ""
+        if self._normalize_approval_text(
+            str(approved_tool_call.get("tool_input", ""))
+        ) != self._normalize_approval_text(decision.tool_input):
+            return False, ""
+
+        approved_step = int(approved_tool_call.get("resume_step_index", 0) or 0)
+        if approved_step > 0 and approved_step != decision.step_index:
+            return False, ""
+
+        approved_risk = str(approved_tool_call.get("risk_level", "")).strip().lower()
+        current_risk = self._tool_risk_level(decision.tool_name).strip().lower()
+        if approved_risk and current_risk and approved_risk != current_risk:
+            return False, ""
+
+        return True, "approved_tool_call"
+
+    def _normalize_approval_text(self, value: str) -> str:
+        return " ".join(value.strip().split())
+
     def _execute_tool(
         self,
         task_id: str,
@@ -1473,6 +1599,8 @@ class AgentRuntime:
                 ok=False,
                 duration_ms=0,
                 reason="unregistered_tool",
+                action="failed",
+                risk_level=self._tool_risk_level(tool_name),
             )
             return result
 
@@ -1506,6 +1634,8 @@ class AgentRuntime:
             ok=result.ok,
             duration_ms=duration_ms,
             reason=result.error.code if result.error is not None else "",
+            action="executed" if result.ok else "failed",
+            risk_level=self._tool_risk_level(tool_name),
         )
 
         return result

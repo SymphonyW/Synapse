@@ -28,6 +28,9 @@ const metadataAgentEnabledKey = "agent_enabled"
 const metadataApprovalGrantedKey = "approval_granted"
 const metadataAgentResumeStepKey = "agent_resume_step_index"
 const metadataAgentRequiredToolKey = "agent_required_tool"
+const metadataAgentRequiredToolInputKey = "agent_required_tool_input"
+const metadataAgentRequiredToolRiskKey = "agent_required_tool_risk_level"
+const metadataAgentRequiredReasonKey = "agent_required_reason"
 
 // ProcessorOptions 控制任务执行循环的运行时行为。
 type ProcessorOptions struct {
@@ -275,6 +278,8 @@ type agentInfoEnvelope struct {
 }
 
 // parseApprovalRequiredInfo 提取审批暂停信息并返回 metadata 更新补丁。
+// 这里不解释或改写原始 info 事件，只把恢复所需的 tool call 字段旁路持久化，
+// 让 API 审批接口后续能生成 approved_tool_call 并从暂停步骤继续执行。
 func parseApprovalRequiredInfo(message string) (string, map[string]string, bool) {
 	trimmed := strings.TrimSpace(message)
 	if trimmed == "" {
@@ -291,11 +296,44 @@ func parseApprovalRequiredInfo(message string) (string, map[string]string, bool)
 	}
 
 	tool := ""
+	toolInput := ""
+	riskLevel := ""
+	approvalReason := ""
 	stepIndex := 0
 	if payload.Payload != nil {
 		if rawTool, ok := payload.Payload["tool"]; ok {
 			if toolValue, castOK := rawTool.(string); castOK {
 				tool = strings.TrimSpace(toolValue)
+			}
+		}
+		if rawToolName, ok := payload.Payload["tool_name"]; ok && tool == "" {
+			if toolValue, castOK := rawToolName.(string); castOK {
+				tool = strings.TrimSpace(toolValue)
+			}
+		}
+
+		if rawToolInput, ok := payload.Payload["tool_input"]; ok {
+			if inputValue, castOK := rawToolInput.(string); castOK {
+				toolInput = strings.TrimSpace(inputValue)
+			}
+		}
+
+		if rawRisk, ok := payload.Payload["risk_level"]; ok {
+			if riskValue, castOK := rawRisk.(string); castOK {
+				riskLevel = strings.TrimSpace(riskValue)
+			}
+		}
+
+		if rawReason, ok := payload.Payload["approval_reason"]; ok {
+			if reasonValue, castOK := rawReason.(string); castOK {
+				approvalReason = strings.TrimSpace(reasonValue)
+			}
+		}
+		if approvalReason == "" {
+			if rawReason, ok := payload.Payload["reason"]; ok {
+				if reasonValue, castOK := rawReason.(string); castOK {
+					approvalReason = strings.TrimSpace(reasonValue)
+				}
 			}
 		}
 
@@ -320,6 +358,15 @@ func parseApprovalRequiredInfo(message string) (string, map[string]string, bool)
 	}
 	if tool != "" {
 		updates[metadataAgentRequiredToolKey] = tool
+	}
+	if toolInput != "" {
+		updates[metadataAgentRequiredToolInputKey] = toolInput
+	}
+	if riskLevel != "" {
+		updates[metadataAgentRequiredToolRiskKey] = riskLevel
+	}
+	if approvalReason != "" {
+		updates[metadataAgentRequiredReasonKey] = approvalReason
 	}
 
 	pauseMessage := "task paused: waiting for approval"

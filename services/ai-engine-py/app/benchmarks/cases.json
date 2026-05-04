@@ -96,5 +96,19 @@
       "approved_tools": "code_exec"
     },
     "min_success": 0.7
+  },
+  {
+    "id": "code_exec_tool_call_approval",
+    "prompt": "run code and evaluate 3 * (4 + 5)",
+    "metadata": {
+      "agent_enabled": "true",
+      "auth_user_role": "admin",
+      "approval_granted": "true",
+      "approved_tool_call": "{\"tool_name\":\"code_exec\",\"tool_input\":\"3 * (4 + 5)\",\"risk_level\":\"high\",\"reason\":\"regression approval\",\"resume_step_index\":1}"
+    },
+    "min_success": 0.7,
+    "required_events": ["tool_finished"],
+    "required_tools": ["code_exec"],
+    "required_answer_contains": ["27"]
   }
 ]

@@ -43,9 +43,21 @@ type cancelTaskRequest struct {
 }
 
 type approveTaskRequest struct {
-	RequestedBy   string   `json:"requested_by"`
-	Reason        string   `json:"reason"`
-	ApprovedTools []string `json:"approved_tools"`
+	RequestedBy      string                   `json:"requested_by"`
+	Reason           string                   `json:"reason"`
+	ApprovedTools    []string                 `json:"approved_tools"`
+	ApprovedToolCall *approvedToolCallRequest `json:"approved_tool_call"`
+}
+
+// approvedToolCallRequest 描述一次具体工具调用的审批结果。
+// 与旧的 approved_tools 相比，它会把工具输入、风险和恢复步骤一并固化，
+// 防止恢复时同名工具用不同参数被误放行。
+type approvedToolCallRequest struct {
+	ToolName        string `json:"tool_name"`
+	ToolInput       string `json:"tool_input"`
+	RiskLevel       string `json:"risk_level"`
+	Reason          string `json:"reason"`
+	ResumeStepIndex int    `json:"resume_step_index"`
 }
 
 type batchCancelTasksRequest struct {
@@ -91,8 +103,12 @@ const (
 	metadataMemoryWriteKey            = "memory_write_enabled"
 	metadataApprovalGrantedKey        = "approval_granted"
 	metadataApprovedToolsKey          = "approved_tools"
+	metadataApprovedToolCallKey       = "approved_tool_call"
 	metadataAgentResumeStepKey        = "agent_resume_step_index"
 	metadataAgentRequiredToolKey      = "agent_required_tool"
+	metadataAgentRequiredToolInputKey = "agent_required_tool_input"
+	metadataAgentRequiredToolRiskKey  = "agent_required_tool_risk_level"
+	metadataAgentRequiredReasonKey    = "agent_required_reason"
 	metadataAgentResumeRequestedByKey = "agent_resume_requested_by"
 )
 
@@ -441,10 +457,16 @@ func (h *Handler) ApproveTask(w http.ResponseWriter, r *http.Request) {
 	}
 
 	approvedTools := normalizeApprovedTools(request.ApprovedTools)
-	if len(approvedTools) == 0 {
-		requiredTool := strings.TrimSpace(task.Metadata[metadataAgentRequiredToolKey])
-		if requiredTool != "" {
-			approvedTools = append(approvedTools, requiredTool)
+	approvedToolCall := normalizeApprovedToolCall(request.ApprovedToolCall)
+	if approvedToolCall == nil && len(approvedTools) == 0 {
+		// 新链路优先从 Worker 持久化的暂停元数据恢复 tool call 级审批记录；
+		// 如果暂停事件缺少 tool_input，则退回到旧的工具名级审批，保持历史任务可恢复。
+		approvedToolCall = approvalCallFromTaskMetadata(task.Metadata)
+		if approvedToolCall == nil {
+			requiredTool := strings.TrimSpace(task.Metadata[metadataAgentRequiredToolKey])
+			if requiredTool != "" {
+				approvedTools = append(approvedTools, strings.ToLower(requiredTool))
+			}
 		}
 	}
 
@@ -456,6 +478,18 @@ func (h *Handler) ApproveTask(w http.ResponseWriter, r *http.Request) {
 	}
 	if len(approvedTools) > 0 {
 		metadataUpdates[metadataApprovedToolsKey] = strings.Join(approvedTools, ",")
+	}
+	if approvedToolCall != nil {
+		// approved_tool_call 以 JSON 字符串落在任务 metadata 中，Worker 重新提交任务时会原样传给 AI Engine。
+		encoded, encodeErr := json.Marshal(approvedToolCall)
+		if encodeErr != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid approved tool call"})
+			return
+		}
+		metadataUpdates[metadataApprovedToolCallKey] = string(encoded)
+		if approvedToolCall.ResumeStepIndex > 0 {
+			metadataUpdates[metadataAgentResumeStepKey] = strconv.Itoa(approvedToolCall.ResumeStepIndex)
+		}
 	}
 
 	if _, ok, updateErr := h.store.UpdateMetadata(taskID, metadataUpdates); updateErr != nil {
@@ -1000,7 +1034,56 @@ func parseApproveTaskRequest(r *http.Request) (approveTaskRequest, error) {
 	request.RequestedBy = strings.TrimSpace(request.RequestedBy)
 	request.Reason = strings.TrimSpace(request.Reason)
 	request.ApprovedTools = normalizeApprovedTools(request.ApprovedTools)
+	request.ApprovedToolCall = normalizeApprovedToolCall(request.ApprovedToolCall)
 	return request, nil
+}
+
+// normalizeApprovedToolCall 清理客户端输入，同时允许空对象表示“不提供精确审批”。
+func normalizeApprovedToolCall(call *approvedToolCallRequest) *approvedToolCallRequest {
+	if call == nil {
+		return nil
+	}
+
+	normalized := &approvedToolCallRequest{
+		ToolName:        strings.ToLower(strings.TrimSpace(call.ToolName)),
+		ToolInput:       strings.TrimSpace(call.ToolInput),
+		RiskLevel:       strings.ToLower(strings.TrimSpace(call.RiskLevel)),
+		Reason:          strings.TrimSpace(call.Reason),
+		ResumeStepIndex: call.ResumeStepIndex,
+	}
+	if normalized.ToolName == "" {
+		return nil
+	}
+	if normalized.ResumeStepIndex < 0 {
+		normalized.ResumeStepIndex = 0
+	}
+	return normalized
+}
+
+// approvalCallFromTaskMetadata 把 approval_required 事件持久化的字段还原成审批记录。
+// 旧事件可能只有工具名，没有 tool_input；这种情况下返回 nil，让调用方使用 approved_tools 兼容路径。
+func approvalCallFromTaskMetadata(metadata map[string]string) *approvedToolCallRequest {
+	requiredTool := strings.ToLower(strings.TrimSpace(metadata[metadataAgentRequiredToolKey]))
+	if requiredTool == "" {
+		return nil
+	}
+	toolInput := strings.TrimSpace(metadata[metadataAgentRequiredToolInputKey])
+	if toolInput == "" {
+		return nil
+	}
+
+	resumeStep := 0
+	if parsed, err := strconv.Atoi(strings.TrimSpace(metadata[metadataAgentResumeStepKey])); err == nil && parsed > 0 {
+		resumeStep = parsed
+	}
+
+	return &approvedToolCallRequest{
+		ToolName:        requiredTool,
+		ToolInput:       toolInput,
+		RiskLevel:       strings.ToLower(strings.TrimSpace(metadata[metadataAgentRequiredToolRiskKey])),
+		Reason:          strings.TrimSpace(metadata[metadataAgentRequiredReasonKey]),
+		ResumeStepIndex: resumeStep,
+	}
 }
 
 func normalizeApprovedTools(rawTools []string) []string {

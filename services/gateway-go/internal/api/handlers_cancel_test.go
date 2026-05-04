@@ -371,6 +371,75 @@ func TestApproveTaskResumesPausedTask(t *testing.T) {
 	}
 }
 
+// 验证未显式传 approved_tool_call 时，审批接口会从 paused metadata 还原精确工具调用审批。
+func TestApproveTaskWritesApprovedToolCallFromPauseMetadata(t *testing.T) {
+	taskStore := store.NewInMemory()
+	seedTask(t, taskStore, "task-paused-tool-call", domain.TaskPaused, "task paused: approval required")
+	_, _, err := taskStore.UpdateMetadata("task-paused-tool-call", map[string]string{
+		metadataAgentRequiredToolKey:      "http_api",
+		metadataAgentRequiredToolInputKey: "https://example.com/api",
+		metadataAgentRequiredToolRiskKey:  "high",
+		metadataAgentRequiredReasonKey:    "external api requires approval",
+		metadataAgentResumeStepKey:        "3",
+	})
+	if err != nil {
+		t.Fatalf("UpdateMetadata returned error: %v", err)
+	}
+
+	taskQueue := queue.NewInMemoryQueue(8)
+	router := NewRouter(NewHandler(taskStore, noopAgentClient{}, taskQueue, &recordingTaskCanceler{}))
+	request := httptest.NewRequest(http.MethodPost, "/v1/tasks/task-paused-tool-call/approve", nil)
+	attachSessionCookie(t, taskStore, request, "ops-console", domain.UserRoleAdmin)
+	response := httptest.NewRecorder()
+
+	router.ServeHTTP(response, request)
+
+	if response.Code != http.StatusAccepted {
+		t.Fatalf("unexpected status: got %d want %d", response.Code, http.StatusAccepted)
+	}
+
+	storedTask, ok := taskStore.Get("task-paused-tool-call")
+	if !ok {
+		t.Fatal("task-paused-tool-call not found in store")
+	}
+	if storedTask.Status != domain.TaskQueued {
+		t.Fatalf("unexpected task status: got %q want %q", storedTask.Status, domain.TaskQueued)
+	}
+	if storedTask.Metadata[metadataAgentResumeStepKey] != "3" {
+		t.Fatalf("unexpected resume step metadata: got %q", storedTask.Metadata[metadataAgentResumeStepKey])
+	}
+
+	var approvedCall approvedToolCallRequest
+	if err := json.Unmarshal([]byte(storedTask.Metadata[metadataApprovedToolCallKey]), &approvedCall); err != nil {
+		t.Fatalf("approved tool call metadata is not valid JSON: %v", err)
+	}
+	if approvedCall.ToolName != "http_api" {
+		t.Fatalf("unexpected approved tool name: got %q", approvedCall.ToolName)
+	}
+	if approvedCall.ToolInput != "https://example.com/api" {
+		t.Fatalf("unexpected approved tool input: got %q", approvedCall.ToolInput)
+	}
+	if approvedCall.RiskLevel != "high" {
+		t.Fatalf("unexpected approved risk level: got %q", approvedCall.RiskLevel)
+	}
+	if approvedCall.Reason != "external api requires approval" {
+		t.Fatalf("unexpected approved reason: got %q", approvedCall.Reason)
+	}
+	if approvedCall.ResumeStepIndex != 3 {
+		t.Fatalf("unexpected approved resume step: got %d", approvedCall.ResumeStepIndex)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	queuedTaskID, dequeueErr := taskQueue.Dequeue(ctx)
+	if dequeueErr != nil {
+		t.Fatalf("Dequeue returned error: %v", dequeueErr)
+	}
+	if queuedTaskID != "task-paused-tool-call" {
+		t.Fatalf("unexpected queued task: got %q want %q", queuedTaskID, "task-paused-tool-call")
+	}
+}
+
 // 验证非 paused 任务审批请求返回 409。
 func TestApproveTaskConflictWhenTaskNotPaused(t *testing.T) {
 	taskStore := store.NewInMemory()

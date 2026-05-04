@@ -7,6 +7,7 @@
       "auth_user_role": "admin",
       "approval_granted": "true"
     },
+    "tags": ["calculator"],
     "min_success": 0.7,
     "required_events": ["memory_recall", "tool_finished"],
     "required_tools": ["calculator"]
@@ -20,6 +21,7 @@
       "approval_granted": "true",
       "model_messages_json": "[{\"role\":\"user\",\"content\":\"we discussed gateway retries\"},{\"role\":\"assistant\",\"content\":\"retry on retryable upstream failures\"}]"
     },
+    "tags": ["retrieval"],
     "min_success": 0.65,
     "required_events": ["memory_recall", "tool_finished"],
     "required_tools": ["retrieval"]
@@ -33,6 +35,7 @@
       "approval_granted": "true",
       "approved_tools": "summarize_page"
     },
+    "tags": ["browser", "approval_resume"],
     "min_success": 0.55,
     "required_events": ["tool_finished"],
     "required_tools": ["summarize_page"],
@@ -46,6 +49,7 @@
       "auth_user_role": "user",
       "approval_granted": "true"
     },
+    "tags": ["browser", "search"],
     "min_success": 0.7,
     "required_events": ["tool_finished"],
     "required_tools": ["search"],
@@ -59,9 +63,25 @@
       "auth_user_role": "user",
       "approval_granted": "false"
     },
+    "tags": ["approval_pause"],
     "expect_pause": true,
     "required_events": ["approval_required"],
     "required_tools": ["http_api"]
+  },
+  {
+    "id": "approval_resume_exact_tool_call",
+    "prompt": "visit https://example.com and summarize",
+    "metadata": {
+      "agent_enabled": "true",
+      "auth_user_role": "user",
+      "approval_granted": "true",
+      "approved_tool_call": "{\"tool_name\":\"summarize_page\",\"tool_input\":\"https://example.com\",\"risk_level\":\"high\",\"reason\":\"regression approval\",\"resume_step_index\":1}"
+    },
+    "tags": ["approval_resume", "browser"],
+    "min_success": 0.55,
+    "required_events": ["tool_finished"],
+    "required_tools": ["summarize_page"],
+    "required_answer_contains": ["https://example.com"]
   },
   {
     "id": "json_echo_protocol",
@@ -71,6 +91,7 @@
       "auth_user_role": "user",
       "approval_granted": "true"
     },
+    "tags": ["tool_protocol"],
     "min_success": 0.7
   },
   {
@@ -82,6 +103,7 @@
       "approval_granted": "true",
       "approved_tools": "summarize_page,retrieval"
     },
+    "tags": ["tool_failure_replanning", "browser", "retrieval"],
     "min_success": 0.7,
     "required_events": ["tool_failed", "replan", "tool_finished"],
     "required_tools": ["summarize_page", "retrieval"]
@@ -95,6 +117,7 @@
       "approval_granted": "true",
       "approved_tools": "code_exec"
     },
+    "tags": ["code_exec"],
     "min_success": 0.7
   },
   {
@@ -106,9 +129,39 @@
       "approval_granted": "true",
       "approved_tool_call": "{\"tool_name\":\"code_exec\",\"tool_input\":\"3 * (4 + 5)\",\"risk_level\":\"high\",\"reason\":\"regression approval\",\"resume_step_index\":1}"
     },
+    "tags": ["code_exec", "approval_resume"],
     "min_success": 0.7,
     "required_events": ["tool_finished"],
     "required_tools": ["code_exec"],
     "required_answer_contains": ["27"]
+  },
+  {
+    "id": "memory_recall_hit",
+    "prompt": "recall gateway retries and audited upstream failures from memory",
+    "metadata": {
+      "agent_enabled": "true",
+      "auth_user_role": "user",
+      "approval_granted": "true"
+    },
+    "tags": ["memory_recall", "retrieval"],
+    "min_success": 0.65,
+    "expect_memory_hit": true,
+    "required_events": ["memory_recall", "tool_finished"],
+    "required_tools": ["retrieval"],
+    "required_answer_contains": ["retryable upstream failures"]
+  },
+  {
+    "id": "mock_direct_answer",
+    "prompt": "summarize this short product note in one sentence",
+    "metadata": {
+      "agent_enabled": "true",
+      "auth_user_role": "user",
+      "approval_granted": "true"
+    },
+    "tags": ["mock_direct_answer"],
+    "min_success": 0.7,
+    "expect_direct_answer": true,
+    "required_events": ["tool_skipped", "evaluate"],
+    "required_answer_contains": ["Mock assistant answer"]
   }
 ]

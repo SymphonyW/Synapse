@@ -1,1 +1,1 @@
-# Benchmarks package for agent regression checks.
+# Agent 回归评测包入口。

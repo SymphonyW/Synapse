@@ -94,6 +94,31 @@ type AgentInfoEnvelope = {
   payload?: Record<string, unknown>
 }
 
+type SourceLink = {
+  url: string
+  label: string
+}
+
+type AgentTimelineItem = {
+  id: string
+  kind: 'plan' | 'memory' | 'tool' | 'source' | 'approval' | 'final'
+  title: string
+  detail: string
+  time?: number
+  status?: 'neutral' | 'ok' | 'warning' | 'error'
+  meta: string[]
+  links: SourceLink[]
+  bullets: string[]
+}
+
+type ApprovedToolCallPayload = {
+  tool_name: string
+  tool_input: string
+  risk_level: string
+  reason: string
+  resume_step_index: number
+}
+
 type SessionIdentity = {
   username: string
   role: UserRole
@@ -120,6 +145,15 @@ const STREAM_EVENT_TYPES = [
   'replay_requested',
   'terminal',
   'unspecified',
+]
+
+const TASK_STATUS_ORDER: TaskStatus[] = [
+  'queued',
+  'running',
+  'paused',
+  'completed',
+  'failed',
+  'canceled',
 ]
 
 const DEAD_LETTER_LIMIT = 100
@@ -187,6 +221,139 @@ function truncatePreview(text: string, limit: number): string {
   }
 
   return `${normalized.slice(0, limit)}...`
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
+}
+
+function readRecordString(record: Record<string, unknown> | undefined, key: string): string {
+  const value = record?.[key]
+  return typeof value === 'string' ? value.trim() : ''
+}
+
+function readRecordNumber(record: Record<string, unknown> | undefined, key: string): number | undefined {
+  const value = record?.[key]
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    return value
+  }
+
+  if (typeof value === 'string') {
+    const parsed = Number.parseInt(value.trim(), 10)
+    return Number.isFinite(parsed) ? parsed : undefined
+  }
+
+  return undefined
+}
+
+function readStringArray(value: unknown): string[] {
+  if (!Array.isArray(value)) {
+    return []
+  }
+
+  return value
+    .filter((item): item is string => typeof item === 'string' && item.trim() !== '')
+    .map((item) => item.trim())
+}
+
+function parseAgentInfoEnvelope(message?: string): AgentInfoEnvelope | null {
+  const normalized = (message ?? '').trim()
+  if (normalized === '') {
+    return null
+  }
+
+  try {
+    const parsed = JSON.parse(normalized) as unknown
+    if (!isRecord(parsed) || typeof parsed.agent_event !== 'string') {
+      return null
+    }
+
+    return {
+      schema: typeof parsed.schema === 'string' ? parsed.schema : undefined,
+      agent_event: parsed.agent_event,
+      display_message:
+        typeof parsed.display_message === 'string' ? parsed.display_message : undefined,
+      payload: isRecord(parsed.payload) ? parsed.payload : undefined,
+    }
+  } catch {
+    return null
+  }
+}
+
+function appendUniqueEvents(previous: StreamEvent[], incoming: StreamEvent[]): StreamEvent[] {
+  if (incoming.length === 0) {
+    return previous
+  }
+
+  const seenEventIDs = new Set(
+    previous
+      .map((event) => event.event_id)
+      .filter((eventID): eventID is number => typeof eventID === 'number'),
+  )
+  const next = [...previous]
+
+  incoming.forEach((event) => {
+    if (typeof event.event_id === 'number') {
+      if (seenEventIDs.has(event.event_id)) {
+        return
+      }
+      seenEventIDs.add(event.event_id)
+    }
+    next.push(event)
+  })
+
+  return next.slice(-240)
+}
+
+function extractURLCandidates(text: string): string[] {
+  const matches = text.match(/https?:\/\/[^\s"'<>),\]}]+/g) ?? []
+  return matches.map((item) => item.replace(/[.,;:!?，。；：！？]+$/, ''))
+}
+
+function collectSourceLinks(payload?: Record<string, unknown>): SourceLink[] {
+  if (!payload) {
+    return []
+  }
+
+  const metadata = isRecord(payload.metadata) ? payload.metadata : undefined
+  const rawCandidates = [
+    readRecordString(payload, 'url'),
+    readRecordString(payload, 'source_url'),
+    readRecordString(payload, 'final_url'),
+    readRecordString(metadata, 'url'),
+    readRecordString(metadata, 'source_url'),
+    readRecordString(metadata, 'final_url'),
+    ...readStringArray(payload.sources),
+    ...readStringArray(metadata?.sources),
+    ...extractURLCandidates(readRecordString(payload, 'output')),
+  ].filter((item) => item !== '')
+
+  const seen = new Set<string>()
+  return rawCandidates
+    .filter((url) => {
+      if (seen.has(url)) {
+        return false
+      }
+      seen.add(url)
+      return true
+    })
+    .map((url, index) => ({
+      url,
+      label: `source ${index + 1}`,
+    }))
+}
+
+function taskEventsForDisplay(
+  eventsByTaskID: Record<string, StreamEvent[]>,
+  fallbackEvents: StreamEvent[],
+  taskID: string,
+  selectedTaskID: string,
+): StreamEvent[] {
+  const storedEvents = eventsByTaskID[taskID] ?? []
+  if (storedEvents.length > 0) {
+    return storedEvents
+  }
+  return taskID === selectedTaskID ? fallbackEvents : []
 }
 
 function ChatMarkdown({ content }: { content: string }) {
@@ -374,6 +541,7 @@ function App() {
   const [tasks, setTasks] = useState<Task[]>([])
   const [selectedTaskID, setSelectedTaskID] = useState('')
   const [events, setEvents] = useState<StreamEvent[]>([])
+  const [eventsByTaskID, setEventsByTaskID] = useState<Record<string, StreamEvent[]>>({})
   const [lastEventID, setLastEventID] = useState(0)
   const [deadLetters, setDeadLetters] = useState<DeadLetterTask[]>([])
   const [health, setHealth] = useState<HealthResponse | null>(null)
@@ -414,6 +582,19 @@ function App() {
   const clientTranscriptRef = useRef<HTMLDivElement | null>(null)
   const transcriptPinnedToBottomRef = useRef(true)
   const lastTranscriptConversationIDRef = useRef('')
+
+  const rememberTaskEvents = (taskID: string, incoming: StreamEvent[]) => {
+    if (taskID.trim() === '' || incoming.length === 0) {
+      return
+    }
+
+    // 聊天时间线需要完整 info 事件，而运维事件流仍然只显示当前选中任务。
+    // 因此这里额外按 task_id 维护一个轻量缓存，切换会话时不必重新解释 SSE。
+    setEventsByTaskID((previous) => ({
+      ...previous,
+      [taskID]: appendUniqueEvents(previous[taskID] ?? [], incoming),
+    }))
+  }
 
   const selectedTask = useMemo(
     () => tasks.find((task) => task.id === selectedTaskID),
@@ -617,6 +798,7 @@ function App() {
             id: `${task.id}-user`,
             role: 'user' as const,
             taskID: task.id,
+            task,
             content: userMessage,
             timestamp: task.created_at,
             status: task.status,
@@ -625,6 +807,7 @@ function App() {
             id: `${task.id}-assistant`,
             role: 'assistant' as const,
             taskID: task.id,
+            task,
             content: assistantTextForTask(task),
             timestamp: task.updated_at,
             status: task.status,
@@ -713,6 +896,261 @@ function App() {
         return status ?? tr('未知', 'unknown')
     }
   }
+
+  const agentTimelineLabel = (agentEvent: string): string => {
+    switch (agentEvent) {
+      case 'plan':
+        return tr('计划步骤', 'Plan Steps')
+      case 'memory_recall':
+        return tr('记忆命中', 'Memory Hits')
+      case 'tool_selected':
+        return tr('选择工具', 'Tool Selected')
+      case 'tool_started':
+        return tr('开始工具', 'Tool Started')
+      case 'tool_finished':
+        return tr('工具完成', 'Tool Finished')
+      case 'tool_failed':
+        return tr('工具失败', 'Tool Failed')
+      case 'tool_skipped':
+        return tr('跳过工具', 'Tool Skipped')
+      case 'approval_required':
+        return tr('需要审批', 'Approval Required')
+      case 'observe':
+        return tr('观察结果', 'Observation')
+      case 'replan':
+        return tr('重新规划', 'Replan')
+      default:
+        return `agent.${agentEvent}`
+    }
+  }
+
+  const buildAgentTimelineItems = (
+    task: Task,
+    taskEvents: StreamEvent[],
+    finalAnswer: string,
+  ): AgentTimelineItem[] => {
+    const items: AgentTimelineItem[] = []
+
+    taskEvents.forEach((event, index) => {
+      const envelope = parseAgentInfoEnvelope(event.message)
+      if (!envelope?.agent_event) {
+        return
+      }
+
+      const payload = envelope.payload
+      const baseID = `${event.event_id ?? index}-${envelope.agent_event}`
+      const eventTime = event.emitted_at_unix_ms
+
+      if (envelope.agent_event === 'plan') {
+        const steps = readStringArray(payload?.steps)
+        const stepCount = readRecordNumber(payload, 'step_count') ?? steps.length
+        items.push({
+          id: baseID,
+          kind: 'plan',
+          title: agentTimelineLabel(envelope.agent_event),
+          detail:
+            stepCount > 0
+              ? language === 'zh'
+                ? `${stepCount} 个步骤`
+                : `${stepCount} steps`
+              : tr('等待规划结果', 'Waiting for plan output'),
+          time: eventTime,
+          status: 'neutral',
+          meta: [],
+          links: [],
+          bullets: steps.slice(0, 6),
+        })
+        return
+      }
+
+      if (envelope.agent_event === 'memory_recall') {
+        const hits = Array.isArray(payload?.hits) ? payload.hits.filter(isRecord) : []
+        const hitCount = readRecordNumber(payload, 'hit_count') ?? hits.length
+        items.push({
+          id: baseID,
+          kind: 'memory',
+          title: agentTimelineLabel(envelope.agent_event),
+          detail:
+            hitCount > 0
+              ? language === 'zh'
+                ? `召回 ${hitCount} 条长期记忆`
+                : `${hitCount} long-term memories recalled`
+              : tr('没有命中长期记忆', 'No long-term memory hit'),
+          time: eventTime,
+          status: hitCount > 0 ? 'ok' : 'neutral',
+          meta: [],
+          links: [],
+          bullets: hits.slice(0, 4).map((hit) => {
+            const summary = readRecordString(hit, 'summary')
+            const preview = readRecordString(hit, 'content_preview')
+            const score = readRecordNumber(hit, 'score')
+            const content = summary || preview || tr('未命名记忆', 'Untitled memory')
+            return typeof score === 'number' ? `${content} · ${score}` : content
+          }),
+        })
+        return
+      }
+
+      if (envelope.agent_event === 'approval_required') {
+        const toolName = readRecordString(payload, 'tool_name') || readRecordString(payload, 'tool')
+        const toolInput = readRecordString(payload, 'tool_input')
+        const riskLevel = readRecordString(payload, 'risk_level')
+        const approvalReason = readRecordString(payload, 'approval_reason') || readRecordString(payload, 'reason')
+        const approvedToolCall = isRecord(payload?.approved_tool_call)
+          ? payload.approved_tool_call
+          : undefined
+        const resumeStep =
+          readRecordNumber(payload, 'resume_step_index') ??
+          readRecordNumber(approvedToolCall, 'resume_step_index')
+        items.push({
+          id: baseID,
+          kind: 'approval',
+          title: agentTimelineLabel(envelope.agent_event),
+          detail: toolInput || approvalReason || tr('等待人工确认后恢复执行', 'Waiting for human approval to resume'),
+          time: eventTime,
+          status: 'warning',
+          meta: [
+            toolName && `${tr('工具', 'Tool')}: ${toolName}`,
+            riskLevel && `${tr('风险', 'Risk')}: ${riskLevel}`,
+            typeof resumeStep === 'number' && `${tr('恢复步骤', 'Resume Step')}: ${resumeStep}`,
+          ].filter((item): item is string => Boolean(item)),
+          links: [],
+          bullets: approvalReason ? [approvalReason] : [],
+        })
+        return
+      }
+
+      if (envelope.agent_event.startsWith('tool_')) {
+        const toolName = readRecordString(payload, 'tool')
+        const toolInput = readRecordString(payload, 'tool_input')
+        const output = readRecordString(payload, 'output_preview') || readRecordString(payload, 'output')
+        const reason = readRecordString(payload, 'reason')
+        const riskLevel = readRecordString(payload, 'risk_level')
+        const duration = readRecordNumber(payload, 'duration_ms')
+        const links = collectSourceLinks(payload)
+        const status =
+          envelope.agent_event === 'tool_finished'
+            ? 'ok'
+            : envelope.agent_event === 'tool_failed'
+              ? 'error'
+              : envelope.agent_event === 'tool_skipped'
+                ? 'warning'
+                : 'neutral'
+
+        items.push({
+          id: baseID,
+          kind: links.length > 0 ? 'source' : 'tool',
+          title: toolName
+            ? `${agentTimelineLabel(envelope.agent_event)} · ${toolName}`
+            : agentTimelineLabel(envelope.agent_event),
+          detail: output || toolInput || reason || envelope.display_message || '',
+          time: eventTime,
+          status,
+          meta: [
+            riskLevel && `${tr('风险', 'Risk')}: ${riskLevel}`,
+            typeof duration === 'number' && `${duration}ms`,
+          ].filter((item): item is string => Boolean(item)),
+          links,
+          bullets: reason && reason !== output ? [reason] : [],
+        })
+      }
+    })
+
+    const cachedFinalAnswer = finalAnswer.trim()
+    if (task.status === 'completed' && cachedFinalAnswer !== '') {
+      items.push({
+        id: `${task.id}-final-answer`,
+        kind: 'final',
+        title: tr('最终回答', 'Final Answer'),
+        detail: truncatePreview(cachedFinalAnswer, 260),
+        time: new Date(task.updated_at).getTime(),
+        status: 'ok',
+        meta: [`${cachedFinalAnswer.length} chars`],
+        links: [],
+        bullets: [],
+      })
+    }
+
+    return items
+  }
+
+  const renderAgentTimeline = (
+    task: Task,
+    taskEvents: StreamEvent[],
+    finalAnswer: string,
+  ) => {
+    const timelineItems = buildAgentTimelineItems(task, taskEvents, finalAnswer)
+    if (timelineItems.length === 0) {
+      return null
+    }
+
+    const hasAttentionItem = timelineItems.some(
+      (item) => item.status === 'warning' || item.status === 'error',
+    )
+
+    return (
+      <details className="agent-timeline" open={task.status !== 'completed' || hasAttentionItem}>
+        <summary>
+          <span>{tr('Agent 执行时间线', 'Agent Execution Timeline')}</span>
+          <strong>{timelineItems.length}</strong>
+        </summary>
+        <ol>
+          {timelineItems.map((item) => (
+            <li className={`agent-timeline-item item-${item.kind} status-${item.status ?? 'neutral'}`} key={item.id}>
+              <div className="timeline-marker" aria-hidden="true" />
+              <div className="timeline-card">
+                <div className="timeline-card-head">
+                  <strong>{item.title}</strong>
+                  {item.time && <time>{formatDateTime(item.time)}</time>}
+                </div>
+                {item.detail && <p>{item.detail}</p>}
+                {item.meta.length > 0 && (
+                  <div className="timeline-meta">
+                    {item.meta.map((meta) => (
+                      <span key={meta}>{meta}</span>
+                    ))}
+                  </div>
+                )}
+                {item.bullets.length > 0 && (
+                  <ul className="timeline-bullets">
+                    {item.bullets.map((bullet, bulletIndex) => (
+                      <li key={`${item.id}-bullet-${bulletIndex}`}>{bullet}</li>
+                    ))}
+                  </ul>
+                )}
+                {item.links.length > 0 && (
+                  <div className="timeline-sources">
+                    {item.links.map((link) => (
+                      <a href={link.url} key={link.url} rel="noreferrer noopener" target="_blank">
+                        {link.label}
+                      </a>
+                    ))}
+                  </div>
+                )}
+              </div>
+            </li>
+          ))}
+        </ol>
+      </details>
+    )
+  }
+
+  const selectedTaskEvents = useMemo(
+    () =>
+      selectedTaskID
+        ? taskEventsForDisplay(eventsByTaskID, events, selectedTaskID, selectedTaskID)
+        : [],
+    [events, eventsByTaskID, selectedTaskID],
+  )
+
+  const opsStatusCounts = useMemo(
+    () =>
+      TASK_STATUS_ORDER.map((status) => ({
+        status,
+        count: tasks.filter((task) => task.status === status).length,
+      })),
+    [tasks],
+  )
 
   useEffect(() => {
     if (typeof window === 'undefined') {
@@ -873,6 +1311,7 @@ function App() {
 
       let responseText = ''
       let hydratedLastEventID = 0
+      let hydratedEvents: StreamEvent[] = []
       let closed = false
       const source = new EventSource(`/v1/tasks/${task.id}/events?last_event_id=0`)
       hydrationSourcesRef.current.set(task.id, source)
@@ -897,6 +1336,7 @@ function App() {
             [task.id]: responseText,
           }))
         }
+        rememberTaskEvents(task.id, hydratedEvents)
       }
 
       const timeoutID = window.setTimeout(() => {
@@ -911,6 +1351,13 @@ function App() {
           if (typeof payload.event_id === 'number') {
             hydratedLastEventID = Math.max(hydratedLastEventID, payload.event_id)
           }
+
+          hydratedEvents = appendUniqueEvents(hydratedEvents, [
+            {
+              ...payload,
+              type: eventType,
+            },
+          ])
 
           if (eventType === 'token' && payload.token) {
             responseText += payload.token
@@ -1157,6 +1604,10 @@ function App() {
         }
 
         setStreamState('live')
+        const normalizedEvent: StreamEvent = {
+          ...payload,
+          type: eventType,
+        }
         setEvents((previous) => {
           // 防止重连后重复投递导致事件重复显示。
           if (
@@ -1166,14 +1617,9 @@ function App() {
             return previous
           }
 
-          return [
-            ...previous,
-            {
-              ...payload,
-              type: eventType,
-            },
-          ]
+          return [...previous, normalizedEvent]
         })
+        rememberTaskEvents(taskID, [normalizedEvent])
 
         if (eventType === 'token' && payload.token) {
           if (replayedResponse !== null) {
@@ -1347,6 +1793,7 @@ function App() {
     setTasks([])
     setDeadLetters([])
     setResponseByTaskID({})
+    setEventsByTaskID({})
     taskLastEventIDRef.current = {}
     hydrationSourcesRef.current.forEach((source) => {
       source.close()
@@ -1432,6 +1879,10 @@ function App() {
 
       upsertTask(created)
       taskLastEventIDRef.current[created.id] = 0
+      setEventsByTaskID((previous) => ({
+        ...previous,
+        [created.id]: [],
+      }))
       setSelectedTaskID(created.id)
       setEvents([])
       setLastEventID(0)
@@ -1520,6 +1971,14 @@ function App() {
         return next
       })
 
+      setEventsByTaskID((previous) => {
+        const next = { ...previous }
+        response.deleted_task_ids.forEach((taskID) => {
+          delete next[taskID]
+        })
+        return next
+      })
+
       response.deleted_task_ids.forEach((taskID) => {
         delete taskLastEventIDRef.current[taskID]
         const source = hydrationSourcesRef.current.get(taskID)
@@ -1572,6 +2031,10 @@ function App() {
         ...previous,
         [taskID]: '',
       }))
+      setEventsByTaskID((previous) => ({
+        ...previous,
+        [taskID]: [],
+      }))
       setSelectedTaskID(taskID)
       setEvents([])
       setLastEventID(0)
@@ -1588,6 +2051,28 @@ function App() {
     }
   }
 
+  const buildApprovedToolCallFromTask = (task: Task): ApprovedToolCallPayload | null => {
+    const metadata = task.metadata ?? {}
+    const toolName = (metadata.agent_required_tool ?? '').trim()
+    const toolInput = (metadata.agent_required_tool_input ?? '').trim()
+    if (toolName === '' || toolInput === '') {
+      return null
+    }
+
+    const resumeStepIndex = Number.parseInt(metadata.agent_resume_step_index ?? '', 10)
+
+    // 第六阶段后，前端优先提交精确 tool call 审批；旧任务缺少 tool_input 时才退回 approved_tools。
+    return {
+      tool_name: toolName,
+      tool_input: toolInput,
+      risk_level: (metadata.agent_required_tool_risk_level ?? '').trim(),
+      reason:
+        (metadata.agent_required_reason ?? '').trim() ||
+        tr('人工审批通过并恢复任务', 'Task approved and resumed by operator'),
+      resume_step_index: Number.isFinite(resumeStepIndex) ? resumeStepIndex : 0,
+    }
+  }
+
   const handleApproveResumeTask = async (taskID: string) => {
     setApprovingTaskID(taskID)
     setRequestError('')
@@ -1596,15 +2081,27 @@ function App() {
       .split(',')
       .map((item) => item.trim())
       .filter((item) => item.length > 0)
+    const taskToApprove = tasks.find((task) => task.id === taskID)
+    const approvedToolCall = taskToApprove ? buildApprovedToolCallFromTask(taskToApprove) : null
+    const approvalBody: {
+      requested_by: string
+      reason: string
+      approved_tools?: string[]
+      approved_tool_call?: ApprovedToolCallPayload
+    } = {
+      requested_by: currentUser?.username || 'web-console',
+      reason: tr('人工审批通过并恢复任务', 'Task approved and resumed by operator'),
+    }
+    if (approvedToolCall) {
+      approvalBody.approved_tool_call = approvedToolCall
+    } else {
+      approvalBody.approved_tools = approvedTools
+    }
 
     try {
       const resumed = await requestJson<Task>(`/v1/tasks/${taskID}/approve`, {
         method: 'POST',
-        body: JSON.stringify({
-          requested_by: currentUser?.username || 'web-console',
-          reason: tr('人工审批通过并恢复任务', 'Task approved and resumed by operator'),
-          approved_tools: approvedTools,
-        }),
+        body: JSON.stringify(approvalBody),
       })
 
       upsertTask(resumed)
@@ -2041,6 +2538,12 @@ function App() {
                     !!activeConversationTask &&
                     message.taskID === activeConversationTask.id &&
                     isActiveAssistantStreaming
+                  const taskTimelineEvents = taskEventsForDisplay(
+                    eventsByTaskID,
+                    events,
+                    message.taskID,
+                    selectedTaskID,
+                  )
 
                   return (
                     <article
@@ -2060,6 +2563,12 @@ function App() {
                           <span className={statusClass(message.status)}>{taskStatusLabel(message.status)}</span>
                         )}
                       </div>
+                      {isAssistant &&
+                        renderAgentTimeline(
+                          message.task,
+                          taskTimelineEvents,
+                          responseByTaskID[message.taskID] ?? '',
+                        )}
                     </article>
                   )
                 })
@@ -2217,6 +2726,23 @@ function App() {
       </header>
 
       {requestError && <p className="error-banner">{requestError}</p>}
+
+      <section className="ops-overview" aria-live="polite">
+        {opsStatusCounts.map((item) => (
+          <article className="ops-metric" key={item.status}>
+            <span>{taskStatusLabel(item.status)}</span>
+            <strong>{item.count}</strong>
+          </article>
+        ))}
+        <article className="ops-metric ops-metric-dead">
+          <span>{tr('死信', 'Dead Letters')}</span>
+          <strong>{deadLetters.length}</strong>
+        </article>
+        <article className="ops-metric">
+          <span>{tr('已选', 'Selected')}</span>
+          <strong>{selectedCancelableTaskIDs.length}</strong>
+        </article>
+      </section>
 
       <main className="dashboard-grid">
         <section className="panel panel-compose">
@@ -2496,6 +3022,18 @@ function App() {
           {selectedTask ? (
             <div className="selected-meta">
               <span className="selected-task-id">{selectedTask.id}</span>
+              {selectedTask.status === 'paused' && (
+                <div className="approval-callout">
+                  <strong>{tr('审批请求', 'Approval Request')}</strong>
+                  <span>
+                    {(selectedTask.metadata?.agent_required_tool ?? '').trim() ||
+                      tr('未知工具', 'Unknown tool')}
+                  </span>
+                  {(selectedTask.metadata?.agent_required_tool_input ?? '').trim() && (
+                    <small>{selectedTask.metadata?.agent_required_tool_input}</small>
+                  )}
+                </div>
+              )}
               <div className="selected-actions">
                 <span className={statusClass(selectedTask.status)}>{taskStatusLabel(selectedTask.status)}</span>
                 {selectedTask.status === 'paused' && (
@@ -2532,19 +3070,43 @@ function App() {
           )}
 
           <ul className="event-list">
-            {events.map((event, index) => (
-              <li key={`${event.event_id ?? 'meta'}-${index}`} className="event-item">
-                <span className="event-time">{formatDateTime(event.emitted_at_unix_ms)}</span>
-                <span className="event-type">{eventTypeLabel(event.type)}</span>
-                <div className="event-content">
-                  {event.token && <code>{event.token}</code>}
-                  {!event.token && (event.message || event.status) && (
-                    <p>{formatEventMessage(event.message) || event.status}</p>
-                  )}
-                </div>
-              </li>
-            ))}
-            {events.length === 0 && <li className="empty">{tr('暂无事件。', 'No events yet.')}</li>}
+            {selectedTaskEvents.map((event, index) => {
+              const agentEnvelope = parseAgentInfoEnvelope(event.message)
+              const agentPayload = agentEnvelope?.payload
+              const sourceLinks = collectSourceLinks(agentPayload)
+              const rawTool = readRecordString(agentPayload, 'tool') || readRecordString(agentPayload, 'tool_name')
+              const stepIndex = readRecordNumber(agentPayload, 'step_index')
+
+              return (
+                <li key={`${event.event_id ?? 'meta'}-${index}`} className="event-item">
+                  <span className="event-time">{formatDateTime(event.emitted_at_unix_ms)}</span>
+                  <span className="event-type">{eventTypeLabel(event.type)}</span>
+                  <div className="event-content">
+                    {event.token && <code>{event.token}</code>}
+                    {!event.token && (event.message || event.status) && (
+                      <p>{formatEventMessage(event.message) || event.status}</p>
+                    )}
+                    {agentEnvelope?.agent_event && (
+                      <div className="event-agent-meta">
+                        <span>{agentTimelineLabel(agentEnvelope.agent_event)}</span>
+                        {typeof stepIndex === 'number' && <span>step {stepIndex}</span>}
+                        {rawTool && <span>{rawTool}</span>}
+                      </div>
+                    )}
+                    {sourceLinks.length > 0 && (
+                      <div className="event-source-links">
+                        {sourceLinks.map((link) => (
+                          <a href={link.url} key={link.url} rel="noreferrer noopener" target="_blank">
+                            {link.label}
+                          </a>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                </li>
+              )
+            })}
+            {selectedTaskEvents.length === 0 && <li className="empty">{tr('暂无事件。', 'No events yet.')}</li>}
           </ul>
         </section>
 

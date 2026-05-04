@@ -18,6 +18,7 @@ from app.tools import (
     ToolCall,
     ToolContext,
     ToolPolicy,
+    ToolProvider,
     ToolRegistry,
     ToolResult,
     register_builtin_tools,
@@ -34,6 +35,7 @@ METADATA_AUTH_USERNAME_KEY = "auth_username"
 METADATA_MEMORY_WRITE_ENABLED_KEY = "memory_write_enabled"
 METADATA_AGENT_RESUME_STEP_KEY = "agent_resume_step_index"
 METADATA_AGENT_REQUIRED_TOOL_KEY = "agent_required_tool"
+METADATA_AGENT_REQUIRED_TOOL_INPUT_KEY = "agent_required_tool_input"
 METADATA_AGENT_RESUME_REQUESTED_BY_KEY = "agent_resume_requested_by"
 METADATA_CLIENT_USER_MESSAGE_KEY = "user_message"
 AGENT_INFO_SCHEMA = "synapse.agent.info.v1"
@@ -143,6 +145,7 @@ class AgentRuntime:
         agent_enable_code_execution: bool = False,
         agent_tool_policy_json: str = "",
         agent_tool_audit_log_file: str = "",
+        agent_tool_providers: tuple[ToolProvider, ...] | list[ToolProvider] | None = None,
     ) -> None:
         raw_provider = model_provider.strip().lower() or "mock"
         alias = model_provider_alias.strip().lower()
@@ -191,8 +194,11 @@ class AgentRuntime:
             enable_code_execution=self._agent_enable_code_execution,
             browse_web=self._execute_browser_tool,
         )
+        for provider in agent_tool_providers or ():
+            # 外部 provider 只负责发现工具，后续角色权限、审批和审计仍由 runtime 统一处理。
+            self._tool_registry.register_provider(provider)
 
-        default_approval_required: set[str] = set()
+        default_approval_required: set[str] = self._tool_registry.default_approval_required()
         if self._agent_require_approval_for_high_risk:
             # 优先使用新的 requires_approval 声明，同时保留 high_risk
             # 作为兼容桥，支持仍只暴露旧字段的工具。
@@ -204,24 +210,15 @@ class AgentRuntime:
                 ):
                     default_approval_required.add(tool_name)
 
+        default_role_allow = {"admin": {"*"}}
+        for role, tools in self._tool_registry.default_role_allow().items():
+            default_role_allow.setdefault(role, set()).update(tools)
+
         self._tool_policy = ToolPolicy.from_json(
             raw_json=agent_tool_policy_json,
-            default_role_allow={
-                "admin": {"*"},
-                "user": {
-                    "retrieval",
-                    "calculator",
-                    "browser_fetch",
-                    "http_api",
-                    "search",
-                    "open_url",
-                    "extract_text",
-                    "summarize_page",
-                    "source_citation",
-                    "json_echo",
-                },
-            },
+            default_role_allow=default_role_allow,
             default_approval_required=default_approval_required,
+            default_disabled_tools=self._tool_registry.default_disabled_tools(),
         )
         self._tool_audit = ToolAuditLogger(agent_tool_audit_log_file)
 
@@ -852,7 +849,9 @@ class AgentRuntime:
         }
 
         if tool is not None:
+            payload["tool_provider"] = self._tool_registry.provider_for(tool_name)
             payload["tool_description"] = tool.description
+            payload["input_schema"] = tool.input_schema
             payload["risk_level"] = tool.risk_level
             payload["requires_approval"] = tool.requires_approval
 
@@ -895,6 +894,20 @@ class AgentRuntime:
         )
         if model_decision is not None:
             return model_decision
+
+        forced_tool = metadata.get(METADATA_AGENT_REQUIRED_TOOL_KEY, "").strip().lower()
+        if forced_tool and self._tool_registry.get(forced_tool) is not None:
+            # 插件工具暂时不纳入启发式关键词选择；测试、后台任务或未来模型 planner
+            # 可以通过 metadata 显式指定工具，执行阶段仍会走统一权限和审批检查。
+            forced_input = metadata.get(METADATA_AGENT_REQUIRED_TOOL_INPUT_KEY, "").strip()
+            return PlannerDecision(
+                step_index=step.index,
+                objective=step.objective,
+                tool_name=forced_tool,
+                tool_input=forced_input or step.objective,
+                planner="metadata_forced",
+                reason="metadata_required_tool",
+            )
 
         tool_name, tool_input = self._select_tool(
             step.objective,
@@ -1658,6 +1671,25 @@ class AgentRuntime:
             return {"payload": tool_input}
         if normalized_name == "retrieval":
             return {"query": tool_input}
+
+        raw_input = tool_input.strip()
+        if raw_input.startswith("{"):
+            try:
+                decoded = json.loads(raw_input)
+            except json.JSONDecodeError:
+                decoded = None
+            if isinstance(decoded, dict):
+                return decoded
+
+        tool = self._tool_registry.get(normalized_name)
+        if tool is not None:
+            properties = tool.input_schema.get("properties")
+            if isinstance(properties, dict) and len(properties) == 1:
+                # 插件工具常见的是单字段 object schema；这里把 planner 的纯文本输入
+                # 自动映射到唯一字段，避免每个 provider 都实现一层旧输入兼容逻辑。
+                only_key = next(iter(properties.keys()))
+                if isinstance(only_key, str) and only_key:
+                    return {only_key: raw_input}
         return {"input": tool_input}
 
     def _execute_http_tool(

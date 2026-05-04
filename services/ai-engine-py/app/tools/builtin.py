@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from typing import Any, Callable, ClassVar
 
 from app.tools.base import BaseAgentTool, RiskLevel, ToolCall, ToolContext, ToolResult
+from app.tools.providers import ToolProviderPolicy
 from app.tools.registry import ToolRegistry
 
 
@@ -371,6 +372,59 @@ def _disabled_browser_tool(
     )
 
 
+class BuiltinToolProvider:
+    """内置工具 provider。
+
+    旧的 register_builtin_tools 会继续存在，但内部改为走 provider 注册，
+    让内置工具和插件工具共享发现、schema 注册和默认策略合并路径。
+    """
+
+    provider_name = "builtin"
+
+    def __init__(
+        self,
+        safe_eval: Callable[[str], str],
+        fetch_http: Callable[[str, bool], ToolResult],
+        enable_code_execution: bool,
+        browse_web: BrowserToolExecutor | None = None,
+    ) -> None:
+        self._safe_eval = safe_eval
+        self._fetch_http = fetch_http
+        self._enable_code_execution = enable_code_execution
+        self._browse_web = browse_web or _disabled_browser_tool
+
+    def discover_tools(self) -> tuple[BaseAgentTool, ...]:
+        return (
+            RetrievalTool(),
+            CalculatorTool(safe_eval=self._safe_eval),
+            BrowserFetchTool(fetch_http=self._fetch_http),
+            HttpAPITool(fetch_http=self._fetch_http),
+            CodeExecTool(safe_eval=self._safe_eval, enabled=self._enable_code_execution),
+            JsonEchoTool(),
+            *_browser_tool_definitions(self._browse_web),
+        )
+
+    def policy_defaults(self) -> ToolProviderPolicy:
+        # 保持原有行为：普通用户可使用除 code_exec 外的内置工具；
+        # code_exec 仍需 admin 或显式策略放行。
+        return ToolProviderPolicy(
+            role_allow={
+                "user": {
+                    "retrieval",
+                    "calculator",
+                    "browser_fetch",
+                    "http_api",
+                    "search",
+                    "open_url",
+                    "extract_text",
+                    "summarize_page",
+                    "source_citation",
+                    "json_echo",
+                }
+            }
+        )
+
+
 def register_builtin_tools(
     registry: ToolRegistry,
     safe_eval: Callable[[str], str],
@@ -378,13 +432,12 @@ def register_builtin_tools(
     enable_code_execution: bool,
     browse_web: BrowserToolExecutor | None = None,
 ) -> None:
-    # 注册顺序不影响查找；把完整内置工具集集中在这里，
-    # 让默认策略和协议测试共享同一个工具可用性来源。
-    registry.register(RetrievalTool())
-    registry.register(CalculatorTool(safe_eval=safe_eval))
-    registry.register(BrowserFetchTool(fetch_http=fetch_http))
-    registry.register(HttpAPITool(fetch_http=fetch_http))
-    registry.register(CodeExecTool(safe_eval=safe_eval, enabled=enable_code_execution))
-    registry.register(JsonEchoTool())
-    for browser_tool in _browser_tool_definitions(browse_web or _disabled_browser_tool):
-        registry.register(browser_tool)
+    # 注册顺序不影响查找；保留该函数作为兼容入口，内部交给 BuiltinToolProvider。
+    registry.register_provider(
+        BuiltinToolProvider(
+            safe_eval=safe_eval,
+            fetch_http=fetch_http,
+            enable_code_execution=enable_code_execution,
+            browse_web=browse_web,
+        )
+    )

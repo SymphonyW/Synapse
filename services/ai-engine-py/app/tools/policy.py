@@ -14,13 +14,15 @@ class ToolPolicy:
         raw_json: str,
         default_role_allow: dict[str, set[str]],
         default_approval_required: set[str],
+        default_disabled_tools: set[str] | None = None,
     ) -> "ToolPolicy":
         role_allow = {
             role: set(tools)
             for role, tools in default_role_allow.items()
         }
         approval_required = set(default_approval_required)
-        disabled_tools: set[str] = set()
+        # provider 可以声明默认禁用项；部署侧 JSON 仍然可以覆盖或补充。
+        disabled_tools: set[str] = set(default_disabled_tools or set())
 
         payload = {}
         raw = raw_json.strip()
@@ -63,11 +65,11 @@ class ToolPolicy:
 
         disabled_payload = payload.get("disabled_tools")
         if isinstance(disabled_payload, list):
-            disabled_tools = {
+            disabled_tools.update({
                 tool.strip().lower()
                 for tool in disabled_payload
                 if isinstance(tool, str) and tool.strip()
-            }
+            })
 
         return cls(
             role_allow=role_allow,

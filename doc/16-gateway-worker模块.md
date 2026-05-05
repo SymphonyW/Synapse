@@ -21,7 +21,7 @@ TaskProcessor 依赖：
 2. processWithRetry 控制重试生命周期。
 3. processTask 内部调用 agent.SubmitTask，持续 Recv 事件。
 4. 每条事件落库，必要时驱动状态更新。
-5. 若收到 info 且内容为 approval_required，则写入恢复 metadata 并切换任务到 paused。
+5. 若收到 info 且内容为 approval_required，则写入恢复 metadata、精确审批上下文并切换任务到 paused。
 6. 终态后清理活跃任务上下文。
 
 ## 4. 重试策略
@@ -39,10 +39,10 @@ TaskProcessor 依赖：
 ## 6. 审批暂停与恢复语义
 
 1. Worker 解析 info 事件中的 agent_event=approval_required。
-2. 调用 TaskStore.UpdateMetadata 写入 approval_granted=false、agent_resume_step_index、agent_required_tool。
+2. 调用 TaskStore.UpdateMetadata 写入 approval_granted=false、agent_resume_step_index、agent_required_tool、agent_required_tool_input、agent_required_tool_risk_level、agent_required_reason。
 3. 任务状态切换为 paused，并写入 paused 事件。
 4. 当 API 调用 approve 接口后，任务会重置为 queued 并重新入队。
-5. 完成态会清理 agent_resume_step_index 与 agent_required_tool。
+5. 完成态会清理审批恢复相关 metadata，避免后续重放误用旧审批上下文。
 
 ## 7. 死信语义
 

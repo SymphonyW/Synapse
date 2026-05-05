@@ -1,485 +1,237 @@
 # Synapse
 
-Synapse 是一个面向 Agent 任务执行的全栈示例工程，核心目标是把“任务提交 -> 异步执行 -> 流式回传 -> 可观测运维”串成一条完整闭环。
+Synapse 是一个面向 Agent 任务执行场景的全栈工程，提供 Web 控制台、Go Gateway、Python AI Engine、任务队列、流式事件、审批恢复、长期记忆和基础运维能力。
 
-项目由三大运行时组件组成：
+## 项目简介
 
-1. Web 控制台（React + Vite）
-2. Gateway（Go + HTTP API + Worker）
-3. AI Engine（Python + gRPC + OpenAI-compatible Runtime）
+Synapse 的目标是把 Agent 任务从提交到执行、从模型输出到前端展示、从失败处理到人工审批串成一条可以本地运行和调试的工程链路。它不是单纯的模型调用示例，而是围绕“任务生命周期”组织后端、前端、协议、存储和运维接口。
 
-在默认配置下，项目提供：
+项目当前由三个主要运行时组成：`apps/web` 提供 React 控制台，`services/gateway-go` 提供 HTTP API、认证、任务编排、SSE 和 Worker，`services/ai-engine-py` 提供 gRPC Runtime、OpenAI-compatible 模型访问、Agent loop、工具治理和长期记忆。
 
-1. 用户注册/登录（Cookie Session）
-2. 任务创建、查询、流式事件订阅
-3. 单任务取消、批量取消
-4. 失败任务死信与重放
-5. 多模型提供方接入（OpenAI / Gemini(OpenAI兼容) / 智谱(OpenAI兼容) / Mock）
-6. 会话上下文拼接与持久化对话体验
+默认配置使用 `mock` 模型 provider，新开发者不需要 API Key 就能跑通任务创建、异步执行、SSE 流式输出和基础管理流程。需要接入真实模型时，可以通过 OpenAI-compatible 配置切换 OpenAI、Gemini 或智谱等提供方。
 
----
+当前仓库没有 k8s、Nginx、Swagger/OpenAPI、Apifox 或 Postman Collection。生产部署方式和正式接口文档生成方式为待确认。
 
-## 一、项目定位与关键能力
+## 核心功能
 
-### 1.1 适合什么场景
+| 功能模块 | 功能说明 | 实现位置 | 状态 |
+|---|---|---|---|
+| 用户认证 | 注册、登录、退出、当前用户查询，使用 HttpOnly Cookie Session 和 bcrypt 密码哈希 | [handlers_auth.go](services/gateway-go/internal/api/handlers_auth.go) | 已完成 |
+| 任务管理 | 创建任务、查询任务、按状态列出任务，任务状态包含 queued/running/paused/completed/failed/canceled | [handlers.go](services/gateway-go/internal/api/handlers.go) | 已完成 |
+| 事件流 | 基于 SSE 输出任务增量事件，支持 `last_event_id` 续传和 terminal 终态事件 | [handlers.go](services/gateway-go/internal/api/handlers.go) | 已完成 |
+| Worker 执行 | 从队列消费任务，调用 AI Engine gRPC stream，持久化 started/info/token/completed/failed 事件 | [processor.go](services/gateway-go/internal/worker/processor.go) | 已完成 |
+| 取消能力 | 支持单任务取消、批量取消、重复取消幂等、终态冲突保护 | [handlers.go](services/gateway-go/internal/api/handlers.go) | 已完成 |
+| 重试、死信与重放 | Worker 有界重试，失败耗尽后写入死信，可通过接口重放 | [processor.go](services/gateway-go/internal/worker/processor.go) | 已完成 |
+| 审批暂停与恢复 | 高风险工具触发 `approval_required` 后任务进入 paused，审批后写入恢复元数据并重新入队 | [handlers.go](services/gateway-go/internal/api/handlers.go), [runtime.py](services/ai-engine-py/app/runtime.py) | 已完成 |
+| 会话上下文 | Web 会话按 `conversation_id` 聚合，Gateway 从历史任务和事件构建 `model_messages_json` | [handlers.go](services/gateway-go/internal/api/handlers.go), [App.tsx](apps/web/src/App.tsx) | 已完成 |
+| 会话删除 | 删除当前用户指定会话下的任务、事件和死信记录 | [handlers.go](services/gateway-go/internal/api/handlers.go) | 已完成 |
+| 长期记忆 | Agent 自动写入和召回文件型记忆，并通过 Gateway 暴露记忆管理 API | [memory.py](services/ai-engine-py/app/memory.py), [handlers_memory.go](services/gateway-go/internal/api/handlers_memory.go) | 已完成 |
+| 工具治理 | 内置 retrieval/calculator/browser/http/code/json/browser 操作工具，支持角色授权、审批、禁用和审计 | [tools](services/ai-engine-py/app/tools) | 已完成 |
+| 工具扩展 | 预留 LocalClass、OpenAPI、MCP adapter provider 接入层 | [providers.py](services/ai-engine-py/app/tools/providers.py) | 部分完成 |
+| Web 控制台 | 用户聊天视图、运维视图、任务列表、事件窗口、审批恢复、死信重放、Agent 轨迹展示 | [App.tsx](apps/web/src/App.tsx) | 已完成 |
+| Agent 回归评测 | 覆盖工具、浏览、记忆、审批、失败恢复等 mock 回归用例 | [regression.py](services/ai-engine-py/app/benchmarks/regression.py) | 已完成 |
 
-1. 需要一个可运行的 Agent 控制平面原型
-2. 需要演示任务队列 + 流式输出 + 可取消 + 重试 + 死信
-3. 需要验证多家模型供应商的 OpenAI-compatible 统一接入
-4. 需要给前后端/多语言协作提供一致的协议边界（Proto + gRPC）
+## 技术栈
 
-### 1.2 当前已实现能力
+| 分类 | 技术 |
+|---|---|
+| 后端语言 | Go 1.25.0 |
+| Gateway 框架 | Go 标准库 `net/http` |
+| AI Engine 语言 | Python 3.12 |
+| AI Engine 通信 | `grpcio` / `grpcio-tools` 1.76.0 |
+| 前端 | React 19.2.4、TypeScript 5.9.3、Vite 8.0.1 |
+| 协议 | Protocol Buffers proto3、gRPC streaming、HTTP、SSE |
+| 数据库 | PostgreSQL 16 alpine，可回退内存存储 |
+| 缓存/队列 | Redis 7 alpine list 队列，可回退内存队列 |
+| 数据访问 | Go `database/sql` + `github.com/lib/pq`，无 ORM |
+| 鉴权方式 | Cookie Session，HttpOnly，SameSite=Lax，`Secure=false` |
+| 模型接入 | Mock provider、OpenAI-compatible `/chat/completions`，使用 Python 标准库 `urllib` |
+| 部署方式 | Dockerfile、Docker Compose |
+| 测试工具 | Go test、Python unittest、Agent regression、前端 ESLint/TypeScript/Vite build |
+| 接口文档 | 暂无 Swagger/OpenAPI/Apifox/Postman，待补充 |
 
-1. 任务生命周期：queued -> running -> paused（可选，等待审批）-> completed/failed/canceled
-2. SSE 事件实时推送，支持 last_event_id 断点续传与 event_id 去重
-3. Worker 有界重试 + 死信记录 + 重放 + paused 审批恢复
-4. 会话级上下文构建（最近轮次拼接，输出 model_messages_json）
-5. 网关权限控制：owner/admin 访问边界、管理员全局运维
+## 系统架构
 
----
-
-## 二、整体架构
+项目是一个前后端分离的模块化多服务工程。Gateway 是控制面，AI Engine 是执行面，Web 是交互面，Postgres 和 Redis 是可选的持久化/队列基础设施。
 
 ```mermaid
-flowchart LR
-    U[Browser / Web Console] -->|HTTP + SSE| G[Gateway-Go]
-    G -->|gRPC Stream| A[AI-Engine-Py]
-    G --> P[(PostgreSQL)]
-    G --> R[(Redis)]
-    G --> Q[(In-memory Queue/Fallback)]
-    G --> S[(In-memory Store/Fallback)]
-
-    subgraph Gateway 内部
-        API[HTTP API]
-        W[Task Worker]
-        API --> W
-    end
+flowchart TD
+    Browser[Web Console / Browser] -->|HTTP JSON| Router[Gateway Router]
+    Browser -->|SSE EventSource| SSE[Task Event Stream]
+    Router --> Auth[Auth and Permission]
+    Auth --> Handler[API Handler]
+    Handler --> Store[(TaskStore)]
+    Handler --> Queue[(TaskQueue)]
+    Handler --> Worker[Task Worker]
+    Worker --> Queue
+    Worker --> Store
+    Worker -->|gRPC SubmitTask stream| AI[AI Engine Runtime]
+    Handler -->|gRPC Memory RPC| AI
+    AI --> Model[Mock or OpenAI-compatible Provider]
+    AI --> Memory[(File Memory Store)]
+    AI --> Audit[(Tool Audit Log)]
+    Store --> Postgres[(PostgreSQL)]
+    Queue --> Redis[(Redis List)]
 ```
 
-核心链路（简化）：
-
-1. 前端调用 POST /v1/tasks 创建任务
-2. Gateway 落库任务（queued）并入队
-3. Worker 出队后调用 AI Engine.SubmitTask（gRPC 流）
-4. AI Engine 输出 info/token 等事件，Gateway 持久化事件
-5. 前端通过 GET /v1/tasks/{taskID}/events SSE 获取增量事件
-6. 遇到审批门禁时任务进入 paused，可由运维 approve 恢复执行
-7. 任务失败时进入死信，可由运维台 replay
-
----
-
-## 三、目录结构与模块说明
-
-## 3.1 顶层目录
-
-| 目录/文件 | 作用 |
-| --- | --- |
-| [apps/web](apps/web) | 前端控制台（用户视图 + 运维视图） |
-| [services/gateway-go](services/gateway-go) | 网关 API、任务编排、队列消费、存储抽象 |
-| [services/ai-engine-py](services/ai-engine-py) | 模型运行时与 gRPC 服务 |
-| [proto/synapse/v1/agent.proto](proto/synapse/v1/agent.proto) | 跨语言协议定义（Go/Python 共享） |
-| [scripts/dev.ps1](scripts/dev.ps1) | Windows 下统一开发入口脚本 |
-| [scripts/post_gen.py](scripts/post_gen.py) | Proto 生成后补齐 Python 包初始化文件 |
-| [docker-compose.yml](docker-compose.yml) | 全栈容器编排（gateway + ai-engine + postgres + redis） |
-| [docker-compose.openai.env.example](docker-compose.openai.env.example) | OpenAI 配置模板 |
-| [docker-compose.gemini.env.example](docker-compose.gemini.env.example) | Gemini(OpenAI兼容) 配置模板 |
-| [docker-compose.zhipu.env.example](docker-compose.zhipu.env.example) | 智谱(OpenAI兼容) 配置模板 |
-| [docker-compose.mirror.env.example](docker-compose.mirror.env.example) | 镜像源加速模板（网络受限） |
-| [Makefile](Makefile) | 类 Unix 环境常用命令入口（proto/gateway/ai/web/agent-regression/up/down） |
-
-## 3.2 Gateway（Go）模块拆解
-
-### 入口与装配
-
-关键文件：
-
-1. [services/gateway-go/cmd/server/main.go](services/gateway-go/cmd/server/main.go)
-
-启动时完成：
-
-1. 加载配置
-2. 连接 AI Engine gRPC
-3. 初始化存储（Postgres 优先，失败回退内存）
-4. 初始化队列（Redis 优先，失败回退内存）
-5. 启动 Worker 消费循环
-6. 启动 HTTP Server 与优雅退出流程
-
-### 配置
-
-关键文件：
-
-1. [services/gateway-go/internal/config/config.go](services/gateway-go/internal/config/config.go)
-
-主要环境变量：
-
-1. SYNAPSE_HTTP_ADDR（默认 :8080）
-2. SYNAPSE_AI_ENGINE_ADDR（默认 127.0.0.1:50051）
-3. SYNAPSE_DATABASE_URL（启用 Postgres）
-4. SYNAPSE_REDIS_ADDR（启用 Redis 队列）
-5. SYNAPSE_TASK_MAX_ATTEMPTS / SYNAPSE_TASK_RETRY_BACKOFF / SYNAPSE_TASK_EXEC_TIMEOUT
-6. SYNAPSE_AUTH_ADMIN_USERNAME / SYNAPSE_AUTH_ADMIN_PASSWORD
-
-### API 层
-
-关键文件：
-
-1. [services/gateway-go/internal/api/router.go](services/gateway-go/internal/api/router.go)
-
-路由包括：
-
-1. 认证：/v1/auth/register, /v1/auth/login, /v1/auth/logout, /v1/auth/me
-2. 任务：/v1/tasks, /v1/tasks/{taskID}, /v1/tasks/{taskID}/cancel, /v1/tasks/cancel, /v1/tasks/{taskID}/approve, /v1/tasks/{taskID}/replay
-3. 事件流：/v1/tasks/{taskID}/events
-4. 运维：/v1/dead-letters
-5. 健康：/healthz
-
-### 任务处理与上下文能力
-
-关键文件：
-
-1. [services/gateway-go/internal/api/handlers.go](services/gateway-go/internal/api/handlers.go)
-
-核心职责：
-
-1. CreateTask 时校验权限、落库、入队
-2. 对话模式下构建 conversation_id + user_message 元数据
-3. 从历史任务与事件重建最近上下文，生成 model_prompt 与 model_messages_json
-4. SSE 按 last_event_id 增量回放，终态发送 terminal 事件
-5. 统一取消语义（首次 202、重复取消 200、终态冲突 409）
-6. paused 任务审批恢复（approve -> queued -> 重新入队）
-
-### 认证与权限
-
-关键文件：
-
-1. [services/gateway-go/internal/api/handlers_auth.go](services/gateway-go/internal/api/handlers_auth.go)
-
-机制：
-
-1. bcrypt 密码哈希
-2. Cookie Session（HttpOnly, SameSite=Lax）
-3. admin/user 双角色
-4. 管理员账号在启动时自动 upsert
-
-### Worker 执行引擎
-
-关键文件：
-
-1. [services/gateway-go/internal/worker/processor.go](services/gateway-go/internal/worker/processor.go)
-
-核心行为：
-
-1. 出队 -> SubmitTask(gRPC 流) -> 持久化事件
-2. 有界重试（可配置 max attempts + backoff）
-3. 部分错误判定为不可重试（DeadlineExceeded、Unauthorized 等）
-4. 重试耗尽进入死信
-5. 运行中可被 API 主动取消
-6. 识别 approval_required 信息并将任务切换为 paused
-
-### 队列抽象
-
-接口：
-
-1. [services/gateway-go/internal/queue/queue.go](services/gateway-go/internal/queue/queue.go)
-
-实现：
-
-1. [services/gateway-go/internal/queue/inmemory.go](services/gateway-go/internal/queue/inmemory.go)
-2. [services/gateway-go/internal/queue/redis.go](services/gateway-go/internal/queue/redis.go)
-
-### 存储抽象
-
-接口：
-
-1. [services/gateway-go/internal/store/store.go](services/gateway-go/internal/store/store.go)
-
-实现：
-
-1. [services/gateway-go/internal/store/inmemory.go](services/gateway-go/internal/store/inmemory.go)
-2. [services/gateway-go/internal/store/postgres.go](services/gateway-go/internal/store/postgres.go)
-
-说明：
-
-1. Postgres 侧自动建表：tasks / task_events / dead_letter_tasks / auth_users / auth_sessions
-
-### 协议与 AI 客户端
-
-1. [services/gateway-go/internal/agent/client.go](services/gateway-go/internal/agent/client.go)
-2. [services/gateway-go/internal/gen/synapse/v1](services/gateway-go/internal/gen/synapse/v1)
-
-## 3.3 AI Engine（Python）模块拆解
-
-### 入口与配置
-
-关键文件：
-
-1. [services/ai-engine-py/app/main.py](services/ai-engine-py/app/main.py)
-2. [services/ai-engine-py/app/config.py](services/ai-engine-py/app/config.py)
-
-说明：
-
-1. 提供方参数统一从环境变量读取，支持超时与重试控制
-
-### Runtime 核心
-
-关键文件：
-
-1. [services/ai-engine-py/app/runtime.py](services/ai-engine-py/app/runtime.py)
-
-功能要点：
-
-1. mock 模式：本地无外部依赖即可流式返回
-2. openai 模式：直接走标准库 urllib（无 OpenAI SDK 依赖）
-3. 支持 SSE stream=true 增量解析
-4. stream 不可用时，自动降级普通 completion（仅在未收到任何 chunk 时）
-5. HTTP 429/5xx、网络错误带重试与回退
-6. 支持 model_messages_json 元数据直传多轮消息
-7. Agent 规划循环（Plan-Act-Observe-Reflect），输出结构化 info 事件
-8. 内置工具、角色策略、审批门禁与工具审计日志
-9. 支持长期记忆读写与恢复执行步点（resume_step）
-
-### gRPC 服务门面
-
-关键文件：
-
-1. [services/ai-engine-py/app/service.py](services/ai-engine-py/app/service.py)
-
-对外暴露：
-
-1. Health
-2. SubmitTask（started/info/token/completed/failed；审批暂停时提前返回）
-
-### Python Proto 生成物
-
-1. [services/ai-engine-py/synapse/v1/agent_pb2.py](services/ai-engine-py/synapse/v1/agent_pb2.py)
-2. [services/ai-engine-py/synapse/v1/agent_pb2_grpc.py](services/ai-engine-py/synapse/v1/agent_pb2_grpc.py)
-
-## 3.4 Web（React）模块拆解
-
-### 入口与构建
-
-关键文件：
-
-1. [apps/web/src/main.tsx](apps/web/src/main.tsx)
-2. [apps/web/package.json](apps/web/package.json)
-3. [apps/web/vite.config.ts](apps/web/vite.config.ts)
-
-说明：
-
-1. 开发代理把 /v1 与 /healthz 转发到 127.0.0.1:8080
-
-### 页面逻辑
-
-关键文件：
-
-1. [apps/web/src/App.tsx](apps/web/src/App.tsx)
-
-主要能力：
-
-1. 登录/注册/退出
-2. 客户端视图（会话列表 + 聊天流）
-3. 运维视图（任务列表、状态筛选、审批恢复、批量取消、死信重放、SSE 事件窗口）
-4. 本地持久化：语言、视图模式、会话身份摘要
-5. SSE 游标缓存与去重，避免重复渲染 token
-6. Agent 控制面板（agent_enabled、memory_write_enabled、approved_tools）
-
----
-
-## 四、协议定义（Proto）
-
-核心协议在 [proto/synapse/v1/agent.proto](proto/synapse/v1/agent.proto)。
-
-### 4.1 gRPC 服务
-
-1. Health(HealthRequest) returns HealthResponse
-2. SubmitTask(SubmitTaskRequest) returns stream AgentEvent
-
-### 4.2 事件类型
-
-1. STARTED
-2. TOKEN
-3. INFO
-4. COMPLETED
-5. FAILED
-
-Gateway 会把枚举转为小写字符串，统一到 HTTP/SSE 事件语义层。
-
----
-
-## 五、技术栈总览
-
-| 技术/框架 | 版本 | 用途 |
-| --- | --- | --- |
-| Go | 1.25.0 | Gateway 服务、HTTP API、Worker 执行逻辑 |
-| net/http | Go 标准库 | 提供 REST API 与 SSE 事件流接口 |
-| gRPC | 1.76.0 | Gateway 与 AI Engine 之间的服务通信 |
-| Protocol Buffers | proto3 | 跨语言协议定义与代码生成 |
-| PostgreSQL | 16 (alpine) | 任务、事件、会话、死信等核心数据持久化 |
-| Redis | 7 (alpine) | 任务队列后端（可回退内存队列） |
-| Python | 3.12 (slim) | AI Engine 运行时与模型适配逻辑 |
-| grpcio / grpcio-tools | 1.76.0 | Python gRPC 服务与 Proto 代码生成 |
-| urllib (Python stdlib) | Python 标准库 | OpenAI-compatible HTTP 请求与 SSE 解析 |
-| React | 19.2.4 | Web 控制台 UI 构建（用户端与运维端） |
-| TypeScript | 5.9.3 | 前端类型系统与工程可维护性 |
-| Vite | 8.0.1 | 前端开发服务器与构建工具 |
-| EventSource | 浏览器标准 | 前端订阅任务 SSE 增量事件 |
-| Docker Compose | v2+ | 多服务本地编排与一键启动 |
-
----
-
-## 六、如何启动（详细）
-
-本节分为三种方式：
-
-1. 全栈 Docker 启动（推荐）
-2. 指定模型提供方启动（OpenAI/Gemini/智谱）
-3. 本地分组件启动（适合调试）
-
-## 6.1 前置环境
-
-至少准备：
-
-1. Docker Desktop（推荐）
-2. PowerShell（Windows）
-3. Node.js 18+（若要本地运行前端）
-4. Go 1.25+（若要本地运行网关）
-5. Python 3.12+（若要本地运行 AI 引擎）
-6. protoc（若要本地重新生成 proto 代码）
-
-## 6.2 方式 A：全栈 Docker 快速启动（Mock 默认）
-
-在仓库根目录执行：
+请求链路：
+
+1. Web 调用 Gateway HTTP API，认证依赖 `synapse_session_token` Cookie。
+2. Gateway 通过 Handler 校验会话、角色和资源归属。
+3. 创建任务时 Gateway 写入 TaskStore，并将 task id 放入 TaskQueue。
+4. Worker 从队列取任务，调用 AI Engine `SubmitTask` gRPC 流。
+5. AI Engine 输出 `started/info/token/completed/failed` 事件。
+6. Gateway 持久化事件，并通过 `/v1/tasks/{taskID}/events` SSE 增量输出。
+7. 如果 AI Engine 输出 `approval_required`，Worker 将任务切到 `paused`，等待 `/approve` 恢复。
+8. 长期记忆通过 AI Engine 文件后端保存，Gateway 的 `/v1/memories` API 只是转发 gRPC Memory RPC。
+
+架构优点：
+
+1. 控制面和模型执行面解耦，Gateway 不直接依赖模型 SDK。
+2. gRPC 内部强类型协议和浏览器 SSE 外部协议各司其职。
+3. Postgres/Redis 不可用时可回退内存实现，便于本地启动。
+4. 任务事件持久化后再输出，支持断线续传和运维审计。
+
+当前限制：
+
+1. Compose 文件不包含 Web 服务，前端需要本地 `npm run dev` 或后续自行补充容器化。
+2. 数据库由启动时自动建表，没有版本化 migration。
+3. Redis 队列使用 List + BRPop，没有 ack/reclaim 语义。
+4. 生产安全能力不足，缺少 HTTPS、Cookie Secure、CSRF、防爆破、Secret Manager 和 CI/CD。
+
+## 目录结构
+
+| 路径 | 说明 |
+|---|---|
+| [apps/web](apps/web) | React + Vite Web 控制台 |
+| [services/gateway-go](services/gateway-go) | Go Gateway，包含 HTTP API、Worker、队列、存储、认证 |
+| [services/ai-engine-py](services/ai-engine-py) | Python AI Engine，包含 gRPC 服务、Runtime、工具、记忆、评测 |
+| [proto/synapse/v1/agent.proto](proto/synapse/v1/agent.proto) | Gateway 和 AI Engine 共享的 gRPC/proto 契约 |
+| [scripts/dev.ps1](scripts/dev.ps1) | Windows PowerShell 开发脚本入口 |
+| [scripts/post_gen.py](scripts/post_gen.py) | Python proto 生成后补齐 `__init__.py` |
+| [docker-compose.yml](docker-compose.yml) | gateway、ai-engine、postgres、redis 本地编排 |
+| [docker-compose.*.env.example](.) | OpenAI/Gemini/智谱/镜像源配置模板 |
+| [Makefile](Makefile) | 类 Unix 环境常用命令入口 |
+| [doc](doc) | 模块级和功能级技术文档 |
+
+## 环境准备
+
+| 依赖 | 用途 | 要求 |
+|---|---|---|
+| Docker Desktop / Docker Compose v2 | 启动 gateway、ai-engine、postgres、redis | 推荐 |
+| PowerShell | 使用 `scripts/dev.ps1` | Windows 推荐 |
+| Go | 本地运行 Gateway 和测试 | `go.mod` 声明 1.25.0 |
+| Python | 本地运行 AI Engine 和测试 | Dockerfile 使用 3.12 |
+| Node.js + npm | 本地运行 Web | `package.json` 未声明 engines，版本待确认，建议使用当前 LTS |
+| protoc | 重新生成 proto 代码 | 仅修改 proto 时需要 |
+| protoc-gen-go / protoc-gen-go-grpc | 生成 Go proto 代码 | 仅修改 proto 时需要 |
+
+安装 Go proto 插件：
 
 ```powershell
-docker compose up --build -d
+go install google.golang.org/protobuf/cmd/protoc-gen-go@v1.36.11
+go install google.golang.org/grpc/cmd/protoc-gen-go-grpc@v1.5.1
 ```
 
-或使用脚本入口：
+## 环境变量
+
+Gateway 环境变量：
+
+| 变量 | 默认值 | 说明 |
+|---|---|---|
+| `SYNAPSE_HTTP_ADDR` | `:8080` | Gateway HTTP 监听地址 |
+| `SYNAPSE_AI_ENGINE_ADDR` | `127.0.0.1:50051` | AI Engine gRPC 地址 |
+| `SYNAPSE_DATABASE_URL` | 空 | 配置后启用 Postgres |
+| `SYNAPSE_DB_CONNECT_TIMEOUT` | `5s` | 数据库连接超时 |
+| `SYNAPSE_REDIS_ADDR` | 空 | 配置后启用 Redis 队列 |
+| `SYNAPSE_REDIS_PASSWORD` | 空 | Redis 密码 |
+| `SYNAPSE_REDIS_DB` | `0` | Redis DB |
+| `SYNAPSE_TASK_QUEUE` | `synapse:tasks` | Redis list 名称 |
+| `SYNAPSE_TASK_MAX_ATTEMPTS` | `3` | Worker 最大尝试次数 |
+| `SYNAPSE_TASK_RETRY_BACKOFF` | `2s` | Worker 重试退避 |
+| `SYNAPSE_TASK_EXEC_TIMEOUT` | `120s` | 单任务执行超时 |
+| `SYNAPSE_HTTP_READ_TIMEOUT` | `15s` | HTTP 读超时 |
+| `SYNAPSE_HTTP_WRITE_TIMEOUT` | `60s` | HTTP 写超时 |
+| `SYNAPSE_AUTH_ADMIN_USERNAME` | `admin` | 启动时 upsert 的管理员账号 |
+| `SYNAPSE_AUTH_ADMIN_PASSWORD` | `123456` | 管理员密码，生产必须覆盖 |
+
+AI Engine 环境变量：
+
+| 变量 | 默认值 | 说明 |
+|---|---|---|
+| `SYNAPSE_AI_BIND_ADDR` | `0.0.0.0:50051` | gRPC 监听地址 |
+| `SYNAPSE_MODEL_PROVIDER` | `mock` | `mock` 或 `openai`，`gemini`/`zhipu` 会归一到 openai 路径 |
+| `SYNAPSE_MODEL_PROVIDER_ALIAS` | 空 | 健康检查展示别名 |
+| `SYNAPSE_OPENAI_API_KEY` | 空 | openai 模式必填 |
+| `SYNAPSE_OPENAI_BASE_URL` | 空 | 默认使用 `https://api.openai.com/v1` |
+| `SYNAPSE_OPENAI_MODEL` | `gpt-4o-mini` | 模型名 |
+| `SYNAPSE_OPENAI_TEMPERATURE` | `0.2` | 温度 |
+| `SYNAPSE_OPENAI_MAX_TOKENS` | `512` | 最大输出 token |
+| `SYNAPSE_OPENAI_HTTP_TIMEOUT_SECONDS` | `45` | 模型 HTTP 超时 |
+| `SYNAPSE_OPENAI_MAX_RETRIES` | `3` | 模型请求最大重试 |
+| `SYNAPSE_OPENAI_RETRY_BACKOFF_SECONDS` | `1.5` | 模型请求退避 |
+| `SYNAPSE_AGENT_ENABLED_DEFAULT` | `true` | 默认启用 Agent loop |
+| `SYNAPSE_AGENT_MAX_PLAN_STEPS` | `6` | 最大计划步数 |
+| `SYNAPSE_AGENT_REQUIRE_APPROVAL_FOR_HIGH_RISK` | `true` | 高风险工具默认需要审批 |
+| `SYNAPSE_AGENT_MEMORY_FILE` | `/tmp/synapse-agent-memory.json` | 文件型长期记忆路径 |
+| `SYNAPSE_AGENT_MEMORY_MAX_ENTRIES_PER_USER` | `80` | 每用户最大记忆条数 |
+| `SYNAPSE_AGENT_MEMORY_RECALL_LIMIT` | `3` | 每次召回条数 |
+| `SYNAPSE_AGENT_TOOL_HTTP_ALLOWLIST` | 空 | HTTP/浏览工具允许访问的域名列表，逗号分隔 |
+| `SYNAPSE_AGENT_TOOL_HTTP_TIMEOUT_SECONDS` | `12` | HTTP/浏览工具超时 |
+| `SYNAPSE_AGENT_ENABLE_CODE_EXECUTION` | `false` | 是否启用 code_exec |
+| `SYNAPSE_AGENT_TOOL_POLICY_JSON` | 空 | 工具角色、审批、禁用策略 |
+| `SYNAPSE_AGENT_TOOL_AUDIT_LOG_FILE` | `/tmp/synapse-agent-tool-audit.log` | 工具审计日志 |
+
+Provider 模板：
+
+| 文件 | 用途 |
+|---|---|
+| [docker-compose.openai.env.example](docker-compose.openai.env.example) | OpenAI |
+| [docker-compose.gemini.env.example](docker-compose.gemini.env.example) | Gemini OpenAI-compatible |
+| [docker-compose.zhipu.env.example](docker-compose.zhipu.env.example) | 智谱 OpenAI-compatible |
+| [docker-compose.mirror.env.example](docker-compose.mirror.env.example) | Docker 镜像源覆盖 |
+
+## 数据库初始化
+
+当前没有 SQL migration 目录，也没有独立初始化脚本。Postgres 初始化由 Gateway 启动时自动完成：
+
+1. `services/gateway-go/internal/store/postgres.go` 中 `ensureSchema` 执行 `CREATE TABLE IF NOT EXISTS`。
+2. 创建表：`tasks`、`task_events`、`dead_letter_tasks`、`auth_users`、`auth_sessions`。
+3. 创建索引：任务事件索引、会话任务索引、会话用户与过期时间索引。
+4. Gateway 启动后自动 upsert 管理员账号。
+
+Docker Compose 默认数据库连接：
+
+```text
+postgres://synapse:synapse@postgres:5432/synapse?sslmode=disable
+```
+
+本地 Gateway 连接 Docker Postgres 时使用：
+
+```powershell
+$env:SYNAPSE_DATABASE_URL = "postgres://synapse:synapse@127.0.0.1:5432/synapse?sslmode=disable"
+$env:SYNAPSE_REDIS_ADDR = "127.0.0.1:6379"
+```
+
+生产建议：将自动建表迁移为版本化 migration，并在发布流程中显式执行。
+
+## 快速启动
+
+### 方式 A：Mock 模式启动后端依赖
+
+该方式启动 `gateway`、`ai-engine`、`postgres`、`redis`。注意：当前 [docker-compose.yml](docker-compose.yml) 不包含 Web 服务。
 
 ```powershell
 .\scripts\dev.ps1 -Task up
 ```
 
-访问地址：
-
-1. Web: http://127.0.0.1:5173（若前端本地 dev）
-2. Gateway API: http://127.0.0.1:8080
-3. AI Engine gRPC: 127.0.0.1:50051
-4. Postgres: 127.0.0.1:5432
-5. Redis: 127.0.0.1:6379
-
-停止：
+或：
 
 ```powershell
-docker compose down
-# 或
-.\scripts\dev.ps1 -Task down
+docker compose up --build -d
 ```
 
-## 6.3 方式 B：按模型提供方启动（推荐真实联调）
-
-### OpenAI
-
-1. 复制模板：
-
-```powershell
-Copy-Item docker-compose.openai.env.example docker-compose.openai.env
-```
-
-2. 编辑 [docker-compose.openai.env](docker-compose.openai.env) 填写真实 API Key
-3. 启动：
-
-```powershell
-.\scripts\dev.ps1 -Task up-openai
-```
-
-### Gemini（OpenAI-compatible）
-
-1. 复制模板：
-
-```powershell
-Copy-Item docker-compose.gemini.env.example docker-compose.gemini.env
-```
-
-2. 编辑 [docker-compose.gemini.env](docker-compose.gemini.env)
-3. 启动：
-
-```powershell
-.\scripts\dev.ps1 -Task up-gemini
-```
-
-### 智谱（OpenAI-compatible）
-
-1. 复制模板：
-
-```powershell
-Copy-Item docker-compose.zhipu.env.example docker-compose.zhipu.env
-```
-
-2. 编辑 [docker-compose.zhipu.env](docker-compose.zhipu.env)
-3. 启动：
-
-```powershell
-.\scripts\dev.ps1 -Task up-zhipu
-```
-
-### 网络受限场景（镜像源 + 智谱）
-
-```powershell
-.\scripts\dev.ps1 -Task up-zhipu-mirror
-```
-
-该命令会同时加载：
-
-1. [docker-compose.mirror.env](docker-compose.mirror.env)
-2. [docker-compose.zhipu.env](docker-compose.zhipu.env)
-
-说明：所有 provider 启动方式都会通过 docker compose --env-file 注入变量，避免修改主编排文件。
-
-## 6.4 方式 C：本地分组件启动（调试友好）
-
-### 步骤 1：生成 Proto 代码
-
-```powershell
-.\scripts\dev.ps1 -Task proto
-```
-
-可拆分执行：
-
-```powershell
-.\scripts\dev.ps1 -Task proto-go
-.\scripts\dev.ps1 -Task proto-py
-```
-
-### 步骤 2：启动依赖（可选）
-
-如果你希望使用持久化和分布式队列，先启动 Postgres/Redis。若不启动，Gateway 会自动回退到内存实现。
-
-### 步骤 3：分别启动服务（建议 3 个终端）
-
-终端 A（AI 引擎）：
-
-```powershell
-.\scripts\dev.ps1 -Task ai
-```
-
-终端 B（Gateway）：
-
-```powershell
-.\scripts\dev.ps1 -Task gateway
-```
-
-终端 C（Web）：
-
-```powershell
-.\scripts\dev.ps1 -Task web
-```
-
-### 步骤 4：访问前端
-
-打开：http://127.0.0.1:5173
-
-## 6.5 前端单独启动
+启动 Web：
 
 ```powershell
 Set-Location apps/web
@@ -487,273 +239,359 @@ npm install
 npm run dev
 ```
 
-生产构建：
+访问：
+
+| 服务 | 地址 |
+|---|---|
+| Web | http://127.0.0.1:5173 |
+| Gateway API | http://127.0.0.1:8080 |
+| AI Engine gRPC | 127.0.0.1:50051 |
+| Postgres | 127.0.0.1:5432 |
+| Redis | 127.0.0.1:6379 |
+
+停止：
 
 ```powershell
-npm run build
+.\scripts\dev.ps1 -Task down
 ```
 
----
+### 方式 B：真实模型 provider
 
-## 七、默认账号与认证说明
+OpenAI：
 
-1. 管理员账号在 Gateway 启动时自动写入
-2. 默认管理员用户名：admin
-3. 默认管理员密码：123456
-4. 生产环境请务必通过环境变量覆盖：
-5. SYNAPSE_AUTH_ADMIN_USERNAME
-6. SYNAPSE_AUTH_ADMIN_PASSWORD
+```powershell
+Copy-Item docker-compose.openai.env.example docker-compose.openai.env
+# 编辑 docker-compose.openai.env，填写 SYNAPSE_OPENAI_API_KEY
+.\scripts\dev.ps1 -Task up-openai
+```
 
-认证机制简述：
+Gemini：
 
-1. 注册时密码 bcrypt 哈希存储
-2. 登录后返回 HttpOnly Cookie（synapse_session_token）
-3. API 层按角色校验资源访问权限
+```powershell
+Copy-Item docker-compose.gemini.env.example docker-compose.gemini.env
+# 编辑 docker-compose.gemini.env，填写 API Key
+.\scripts\dev.ps1 -Task up-gemini
+```
 
----
+智谱：
 
-## 八、接口清单（HTTP）
+```powershell
+Copy-Item docker-compose.zhipu.env.example docker-compose.zhipu.env
+# 编辑 docker-compose.zhipu.env，填写 API Key
+.\scripts\dev.ps1 -Task up-zhipu
+```
 
-### 8.1 健康检查
+镜像源组合：
 
-1. GET /healthz
+```powershell
+Copy-Item docker-compose.mirror.env.example docker-compose.mirror.env
+.\scripts\dev.ps1 -Task up-zhipu-mirror
+```
 
-### 8.2 认证
+更多脚本任务见 [scripts/dev.ps1](scripts/dev.ps1)，包括 `up-mirror`、`up-openai-mirror`、`up-gemini-mirror`、`verify-agent-mode`。
 
-1. POST /v1/auth/register
-2. POST /v1/auth/login
-3. POST /v1/auth/logout
-4. GET /v1/auth/me
+### 方式 C：本地分组件启动
 
-### 8.3 任务与运维
+安装前端依赖：
 
-1. GET /v1/tasks
-2. POST /v1/tasks
-3. GET /v1/tasks/{taskID}
-4. POST /v1/tasks/{taskID}/cancel
-5. POST /v1/tasks/cancel
-6. POST /v1/tasks/{taskID}/approve
-7. POST /v1/tasks/{taskID}/replay
-8. GET /v1/tasks/{taskID}/events
-9. GET /v1/dead-letters
+```powershell
+Set-Location apps/web
+npm install
+Set-Location ..\..
+```
 
----
+安装 Python 依赖：
 
-## 九、事件流与状态机
+```powershell
+python -m venv .venv
+.\.venv\Scripts\Activate.ps1
+python -m pip install -U pip
+python -m pip install -r services/ai-engine-py/requirements.txt
+```
 
-## 9.1 任务状态
+拉起 Postgres/Redis：
 
-1. queued
-2. running
-3. paused
-4. completed
-5. failed
-6. canceled
+```powershell
+docker compose up -d postgres redis
+```
 
-## 9.2 常见 SSE 事件
+设置本地 Gateway 环境变量：
 
-1. info
-2. started
-3. token
-4. paused
-5. approval_granted
-6. resume_requested
-7. cancel_requested
-8. canceled
-9. completed
-10. failed
-11. dead_lettered
-12. replay_requested
-13. terminal
+```powershell
+$env:SYNAPSE_DATABASE_URL = "postgres://synapse:synapse@127.0.0.1:5432/synapse?sslmode=disable"
+$env:SYNAPSE_REDIS_ADDR = "127.0.0.1:6379"
+$env:SYNAPSE_AI_ENGINE_ADDR = "127.0.0.1:50051"
+```
 
-## 9.3 取消语义（非常重要）
+如修改过 proto，先生成代码：
 
-1. queued/running/paused 首次取消：202 Accepted
-2. 已取消再次取消：200 OK（幂等）
-3. completed/failed 取消：409 Conflict
+```powershell
+.\scripts\dev.ps1 -Task proto
+```
 
-## 9.4 审批恢复语义
+分别启动三个终端：
 
-1. Worker 识别 info 事件中的 approval_required 后，任务切换为 paused
-2. 调用 POST /v1/tasks/{taskID}/approve 后，任务状态重置为 queued 并重新入队
-3. 网关会补充 approval_granted 与 resume_requested 事件，便于前端与运维审计
+```powershell
+# 终端 A
+.\scripts\dev.ps1 -Task ai
 
----
+# 终端 B
+.\scripts\dev.ps1 -Task gateway
 
-## 十、创新点（当前项目最有价值的设计）
+# 终端 C
+.\scripts\dev.ps1 -Task web
+```
 
-### 10.1 OpenAI-compatible 统一接入层
+如果不启动 Postgres/Redis，Gateway 会回退内存存储和内存队列，但重启后数据丢失。
 
-1. 在 Python Runtime 里以 openai 作为统一传输通道
-2. 通过 base_url + model 即可切换 OpenAI/Gemini/智谱
-3. provider_alias 让健康检查可展示语义供应商名称
-4. 避免每个供应商做一套 SDK 集成，降低复杂度
+## 验证运行成功
 
-### 10.2 流式链路端到端打通（gRPC -> 持久化 -> SSE）
+以下命令假设 Gateway 已在 `127.0.0.1:8080` 运行。
 
-1. AI Engine 逐 token 输出 gRPC 事件
-2. Gateway 落库存证并转换为 SSE
-3. 前端支持 last_event_id 游标续传与去重
-4. 在网络波动、页面重连下仍能尽量保持连续体验
+```powershell
+$base = "http://127.0.0.1:8080"
+curl.exe -s "$base/healthz"
+```
 
-### 10.3 会话上下文由后端拼接，不依赖前端拼 prompt
+预期返回包含：
 
-1. Gateway 从持久化任务与事件中重建最近对话轮次
-2. 自动生成 model_messages_json 或 model_prompt
-3. 限制上下文窗口，避免 prompt 无界增长
-4. 减少前端上下文组装错误，统一策略在服务端可审计
-
-### 10.4 可靠性策略可回退
-
-1. Postgres 不可用时回退内存存储
-2. Redis 不可用时回退内存队列
-3. 开发环境可快速起步，生产环境可平滑升级
-
-### 10.5 运维友好：审批恢复 + 重试 + 死信 + 重放 + 批量取消
-
-1. 审批门禁触发时任务可进入 paused，并由运维人工恢复
-2. Worker 可配置重试次数和退避
-3. 不可恢复错误快速失败，避免无效重试
-4. 失败任务入死信，前端一键 replay
-5. 批量取消有失败明细，支持复制失败 ID 继续处理
-
-### 10.6 权限边界清晰
-
-1. 任务访问按用户隔离
-2. 死信接口管理员专属
-3. 认证会话持久化，便于服务重启后继续访问
-
-### 10.7 Agent 工具治理与审批恢复闭环
-
-1. Runtime 内置工具注册表 + 角色策略 + 可配置审批规则
-2. 高风险工具在未审批时会触发暂停，而不是直接失败
-3. 网关以 paused 状态承接暂停语义，运维台可人工 approve 恢复执行
-4. 工具调用可输出审计日志，方便合规追踪与问题定位
-
----
-
-## 十一、后续完善方向（详细路线图）
-
-下面按优先级分层列出建议。
-
-### 11.1 P0（上线前必须）
-
-1. 安全加固
-2. Cookie Secure=true + HTTPS
-3. 增加 CSRF 防护与登录频率限制
-4. 管理员默认密码禁用，改为首次初始化必须设置
-
-5. 配置与密钥治理
-6. 统一接入 .env 管理与 Secret Manager
-7. CI 中增加敏感信息扫描
-
-8. 数据库迁移体系
-9. 引入 migration 工具（如 goose 或 migrate）
-10. 把自动建表逻辑迁移到版本化脚本
-
-### 11.2 P1（可用性与规模）
-
-1. 队列语义升级
-2. 从 Redis List 升级到支持 ack/reclaim 的消息系统
-3. 支持并发 worker 与消费组
-
-4. 可观测性建设
-5. 接入 OpenTelemetry trace + metrics + structured logging
-6. 关键指标：队列堆积、平均耗时、失败率、重试率、SSE 活跃连接
-
-7. 任务查询能力增强
-8. 增加分页、时间范围、用户维度过滤
-9. 后端直接支持按 user_id 查询，减少内存二次过滤
-
-### 11.3 P2（体验与业务能力）
-
-1. 多模型路由策略
-2. 按任务类型、成本预算、延迟 SLA 自动选路
-3. 支持 fallback provider 与熔断
-
-4. 前端架构演进
-5. 将大型 App.tsx 拆分为 feature modules
-6. 引入统一数据层（如 React Query）和更细粒度状态管理
-
-7. 对话能力增强
-8. 支持会话重命名、归档、搜索
-9. 支持上下文压缩与摘要记忆
-
-### 11.4 P3（工程化）
-
-1. CI/CD 全流程
-2. lint + test + build + image scan + deploy pipeline
-3. 自动发布版本与 changelog
-
-4. 测试体系补齐
-5. 增加 API 集成测试、SSE 端到端测试、前端组件测试
-6. 为多 provider 增加契约测试与回归基线
-
----
-
-## 十二、常见问题与排障
-
-### 12.1 任务一直 running 没有回复
-
-排查顺序建议：
-
-1. 先看 /healthz 的 model_provider 是否符合预期
-2. 核对容器内 SYNAPSE_OPENAI_BASE_URL 与 API key 是否匹配当前 provider
-3. 若是网络受限环境，优先使用 up-zhipu-mirror 或镜像源 env
-4. 用登录态走完整流程：登录 -> 创建任务 -> 轮询任务状态 -> 查看 SSE token 事件
-
-### 12.2 为什么本地没起 Postgres/Redis 也能跑
-
-这是设计特性。Gateway 会自动回退到内存存储和内存队列，便于开发体验；但重启后数据不会保留。
-
-### 12.3 流式事件重复/断流怎么处理
-
-项目前后端都做了游标策略：
-
-1. 后端支持 last_event_id 增量拉取
-2. 前端缓存每个任务游标并对 event_id 去重
-3. 终态发送 terminal 作为结束信号
-
----
-
-## 十三、开发命令速查
-
-### PowerShell 脚本入口
+```json
+{"status":"ok","ai_engine":"ok","model_provider":"mock"}
+```
+
+登录默认管理员：
+
+```powershell
+curl.exe -s -c .\synapse.cookies `
+  -H "Content-Type: application/json" `
+  -d '{"username":"admin","password":"123456"}' `
+  "$base/v1/auth/login"
+```
+
+创建任务：
+
+```powershell
+$response = curl.exe -s -b .\synapse.cookies `
+  -H "Content-Type: application/json" `
+  -d '{"prompt":"hello synapse, summarize current runtime","metadata":{"client_view":"chat","agent_enabled":"true","memory_write_enabled":"true"}}' `
+  "$base/v1/tasks"
+
+$task = $response | ConvertFrom-Json
+$task.id
+```
+
+查询任务：
+
+```powershell
+curl.exe -s -b .\synapse.cookies "$base/v1/tasks/$($task.id)"
+```
+
+查看 SSE：
+
+```powershell
+curl.exe -N -b .\synapse.cookies "$base/v1/tasks/$($task.id)/events"
+```
+
+验证长期记忆 API：
+
+```powershell
+curl.exe -s -b .\synapse.cookies "$base/v1/memories?limit=5"
+curl.exe -s -b .\synapse.cookies "$base/v1/memories/recall?query=synapse&limit=3"
+```
+
+Web 验证：
+
+1. 打开 http://127.0.0.1:5173。
+2. 使用 `admin` / `123456` 登录。
+3. 在用户视图创建任务，确认聊天流有 token 输出。
+4. 切到运维视图，确认任务列表、事件窗口、取消、死信列表等面板可见。
+
+## HTTP 接口
+
+| 方法 | 路径 | 说明 | 认证 |
+|---|---|---|---|
+| GET | `/healthz` | Gateway 通过 gRPC 检查 AI Engine | 否 |
+| POST | `/v1/auth/register` | 注册普通用户 | 否 |
+| POST | `/v1/auth/login` | 登录并写入 Cookie | 否 |
+| POST | `/v1/auth/logout` | 退出登录 | 可选 |
+| GET | `/v1/auth/me` | 查询当前用户 | 是 |
+| GET | `/v1/tasks` | 查询任务列表，支持 `limit`、`status` | 是 |
+| POST | `/v1/tasks` | 创建任务 | 是 |
+| GET | `/v1/tasks/{taskID}` | 查询单个任务 | 是 |
+| GET | `/v1/tasks/{taskID}/events` | SSE 事件流，支持 `last_event_id` | 是 |
+| POST | `/v1/tasks/{taskID}/cancel` | 取消单任务 | 是 |
+| POST | `/v1/tasks/cancel` | 批量取消 | 是 |
+| POST | `/v1/tasks/{taskID}/approve` | 审批 paused 任务并恢复 | 是 |
+| POST | `/v1/tasks/{taskID}/replay` | 重放非 running 任务 | 是 |
+| DELETE | `/v1/conversations/{conversationID}` | 删除当前用户会话下所有任务 | 是 |
+| GET | `/v1/dead-letters` | 查询死信任务 | 管理员 |
+| GET | `/v1/memories` | 查询长期记忆，支持 `limit`、管理员 `user_id` | 是 |
+| POST | `/v1/memories` | 手工写入长期记忆 | 是 |
+| GET | `/v1/memories/recall` | 召回长期记忆，支持 `query`、`limit`、管理员 `user_id` | 是 |
+| DELETE | `/v1/memories/{memoryID}` | 删除长期记忆，管理员可带 `user_id` | 是 |
+
+更多字段和示例见 [doc/05-接口验证手册.md](doc/05-接口验证手册.md)。
+
+## gRPC 协议
+
+协议定义在 [proto/synapse/v1/agent.proto](proto/synapse/v1/agent.proto)。
+
+| RPC | 说明 |
+|---|---|
+| `Health` | 返回 AI Engine 运行状态和模型 provider |
+| `SubmitTask` | Gateway 提交任务，AI Engine 流式返回 AgentEvent |
+| `MemoryWrite` | 写入长期记忆 |
+| `MemoryRecall` | 召回长期记忆 |
+| `MemoryDelete` | 删除长期记忆 |
+| `MemoryList` | 列出长期记忆 |
+
+`SubmitTask` 事件类型：
+
+1. `AGENT_EVENT_TYPE_STARTED`
+2. `AGENT_EVENT_TYPE_TOKEN`
+3. `AGENT_EVENT_TYPE_INFO`
+4. `AGENT_EVENT_TYPE_COMPLETED`
+5. `AGENT_EVENT_TYPE_FAILED`
+
+Gateway 会将这些事件归一为小写字符串并持久化。`paused`、`approval_granted`、`resume_requested`、`terminal` 等事件由 Gateway 派生。
+
+## 开发命令
+
+PowerShell：
 
 ```powershell
 .\scripts\dev.ps1 -Task proto
 .\scripts\dev.ps1 -Task proto-go
 .\scripts\dev.ps1 -Task proto-py
-.\scripts\dev.ps1 -Task gateway
 .\scripts\dev.ps1 -Task ai
+.\scripts\dev.ps1 -Task gateway
 .\scripts\dev.ps1 -Task web
 .\scripts\dev.ps1 -Task agent-regression
+.\scripts\dev.ps1 -Task verify-agent-mode
 .\scripts\dev.ps1 -Task up
+.\scripts\dev.ps1 -Task up-mirror
 .\scripts\dev.ps1 -Task up-openai
+.\scripts\dev.ps1 -Task up-openai-mirror
 .\scripts\dev.ps1 -Task up-gemini
+.\scripts\dev.ps1 -Task up-gemini-mirror
 .\scripts\dev.ps1 -Task up-zhipu
 .\scripts\dev.ps1 -Task up-zhipu-mirror
 .\scripts\dev.ps1 -Task down
 ```
 
-### Go 测试
+Makefile：
+
+```bash
+make proto
+make gateway
+make ai
+make web
+make agent-regression
+make up
+make down
+```
+
+## 测试
+
+Go 单元测试：
 
 ```powershell
 Set-Location services/gateway-go
 go test ./...
+Set-Location ..\..
 ```
 
-### Web 构建
+Python 单元测试：
+
+```powershell
+Set-Location services/ai-engine-py
+python -m unittest discover -s tests -p "test_*.py"
+Set-Location ..\..
+```
+
+Agent 回归评测：
+
+```powershell
+Set-Location services/ai-engine-py
+python -m app.benchmarks.regression
+Set-Location ..\..
+```
+
+前端检查：
 
 ```powershell
 Set-Location apps/web
+npm run lint
 npm run build
+Set-Location ..\..
 ```
 
----
+本次文档更新前已验证：
 
-## 十四、补充说明
+| 命令 | 结果 |
+|---|---|
+| `go test ./...` | 通过 |
+| `python -m unittest discover -s tests -p "test_*.py"` | 21 个测试通过 |
+| `python -m app.benchmarks.regression` | 12/12 通过 |
+| `npm run build` | 本次未运行，避免在分析阶段刷新前端构建产物 |
 
-1. 技术文档已整理在 [doc/README.md](doc/README.md)，按模块与功能拆分为独立文档
-2. 前端子目录已有单独说明： [apps/web/README.md](apps/web/README.md)
-3. 本 README 面向全项目视角，建议与前端 README 配合阅读
+## 部署说明
+
+当前仓库只提供 Docker Compose 本地编排：
+
+```powershell
+docker compose up --build -d
+```
+
+镜像构建：
+
+1. Gateway Dockerfile 会安装 protoc 和 Go proto 插件，构建静态二进制 `/gateway`。
+2. AI Engine Dockerfile 会安装 Python requirements，生成 Python proto 代码，并以 `python -m app.main` 启动。
+3. Web 当前没有 Dockerfile，也没有被 Compose 编排。
+
+生产部署待确认项：
+
+1. Web 静态产物托管方式。
+2. Gateway 和 AI Engine 的服务发现、横向扩缩容和健康检查策略。
+3. Postgres migration 和备份恢复策略。
+4. Redis 队列可靠投递语义。
+5. HTTPS、Cookie Secure、CSRF、防爆破、Secret 管理。
+6. CI/CD、镜像扫描、发布版本和回滚流程。
+
+## 工程亮点
+
+| 设计 | 价值 |
+|---|---|
+| gRPC stream + SSE | 内部强类型流式协议，外部浏览器原生消费 |
+| 事件持久化 | 支持断线续传、终态判断和运维审计 |
+| 存储/队列回退 | 本地开发不依赖完整基础设施 |
+| 精确工具审批 | `approved_tool_call` 匹配工具名、输入、风险和恢复步点 |
+| FileMemoryStore | 轻量实现长期记忆读写和召回，便于后续替换向量后端 |
+| ToolProvider 抽象 | 为本地 Python 工具、OpenAPI 工具和 MCP adapter 预留统一扩展入口 |
+| Agent regression | 用稳定 mock case 做工具、审批、记忆和失败恢复门禁 |
+
+## 后续扩展
+
+| 方向 | 建议 |
+|---|---|
+| 数据库 | 引入 goose/migrate 等 migration 工具，替代启动自动建表 |
+| 队列 | 从 Redis List 升级到支持 ack/reclaim 的消息系统 |
+| 安全 | 开启 HTTPS、Cookie Secure、CSRF、防爆破、密钥管理 |
+| 接口文档 | 从 router/handler 生成 OpenAPI，并提供 Postman/Apifox 集合 |
+| Web 部署 | 增加 Web Dockerfile 或静态托管说明 |
+| 可观测性 | 接入结构化日志、metrics、trace 和任务级 dashboard |
+| 工具生态 | 完成 OpenAPI executor、MCP adapter 真实连接和权限配置 UI |
+| 模型治理 | 增加 provider 路由、fallback、熔断、限流和成本统计 |
+
+## 文档索引
+
+技术文档在 [doc/README.md](doc/README.md)：
+
+1. [总体架构](doc/01-总体架构.md)
+2. [部署与启动](doc/02-部署与启动.md)
+3. [协议与通信](doc/03-协议与通信.md)
+4. [数据库与存储](doc/04-数据库与存储.md)
+5. [接口验证手册](doc/05-接口验证手册.md)
+6. [Gateway API 模块](doc/12-gateway-api模块.md)
+7. [AI Engine 模块](doc/20-ai-engine模块.md)
+8. [Agent 工具治理与审批策略](doc/45-功能-Agent工具治理与审批策略.md)

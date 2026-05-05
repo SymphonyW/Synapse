@@ -1,68 +1,117 @@
 # Web 模块
 
-## 1. 模块定位
+Web 是 Synapse 的操作入口，提供普通用户聊天视图和管理员运维视图。当前 Web 使用 Vite 本地启动，未被 [docker-compose.yml](../docker-compose.yml) 编排。
 
-Web 是 Synapse 的操作入口，提供“用户端聊天视图”和“管理员运维视图”。
+## 关键文件
 
-关联文件：
+| 文件 | 说明 |
+|---|---|
+| [App.tsx](../apps/web/src/App.tsx) | 主要页面、状态、API 调用和 SSE 逻辑 |
+| [App.css](../apps/web/src/App.css) | 页面样式 |
+| [main.tsx](../apps/web/src/main.tsx) | React 入口 |
+| [vite.config.ts](../apps/web/vite.config.ts) | Vite 配置和 `/v1`、`/healthz` 代理 |
+| [package.json](../apps/web/package.json) | npm 脚本和依赖 |
 
-1. [apps/web/src/App.tsx](../apps/web/src/App.tsx)
-2. [apps/web/src/main.tsx](../apps/web/src/main.tsx)
-3. [apps/web/vite.config.ts](../apps/web/vite.config.ts)
-4. [apps/web/package.json](../apps/web/package.json)
+## 技术栈
 
-## 2. 视图模式
+| 分类 | 技术 |
+|---|---|
+| 框架 | React 19 |
+| 语言 | TypeScript |
+| 构建 | Vite 8 |
+| Markdown | react-markdown、remark-gfm、remark-breaks |
+| 代码检查 | ESLint |
 
-1. client：普通用户主入口，聚焦多轮会话。
-2. ops：管理员运维台，聚焦任务全局管理。
+## 启动
 
-视图模式保存在 localStorage，键名：
+```powershell
+Set-Location apps/web
+npm install
+npm run dev
+```
 
-1. synapse.web.view-mode
-2. synapse.web.language
-3. synapse.web.auth.session
+默认地址：http://127.0.0.1:5173。
 
-## 3. 核心交互
+Vite 代理：
 
-1. 登录/注册/登出。
-2. 创建任务并自动选中。
-3. 会话维度消息展示（conversation_id）。
-4. 任务状态实时更新与事件流可视化。
-5. paused 任务审批恢复（Approve & Resume）。
-6. 单任务取消、批量取消。
-7. 死信查看与重放。
-8. Agent 高级开关（agent_enabled、memory_write_enabled、approval_granted、approved_tools）。
+| 路径 | 目标 |
+|---|---|
+| `/v1` | `http://127.0.0.1:8080` |
+| `/healthz` | `http://127.0.0.1:8080` |
 
-## 4. 数据刷新策略
+## 视图模式
 
-1. 健康状态：10 秒轮询。
-2. 任务列表：4 秒轮询。
-3. 选中任务详情：1.5 秒轮询兜底。
-4. 死信列表：5 秒轮询（仅运维台）。
+| 模式 | 说明 |
+|---|---|
+| `client` | 普通用户聊天入口，按会话组织任务 |
+| `ops` | 管理员运维台，管理任务、审批、取消、死信和事件流 |
 
-## 5. SSE 策略
+localStorage：
 
-1. 针对选中任务建立独立 EventSource。
-2. 通过 last_event_id 续传。
-3. 客户端基于 event_id 去重，避免重连重复展示。
-4. 收到 terminal 自动关闭连接。
-5. 前端已监听 paused/approval_granted/resume_requested 等审批相关事件。
+| Key | 说明 |
+|---|---|
+| `synapse.web.language` | 中英文切换 |
+| `synapse.web.view-mode` | 当前视图模式 |
+| `synapse.web.auth.session` | 当前会话身份摘要，不保存密码 |
 
-## 6. 权限行为
+## 核心能力
 
-1. 非管理员强制停留 client 视图。
-2. 普通用户无法进入运维台。
-3. 任务创建时 user_id 固定由后端会话确定，前端仅做展示输入。
-4. 后端依然是权限最终裁决方。
+| 能力 | 说明 |
+|---|---|
+| 认证 | 登录、注册、退出、自动查询当前用户 |
+| 会话视图 | 按 `conversation_id` 聚合任务，展示多轮聊天 |
+| 会话删除 | 调用 `DELETE /v1/conversations/{conversationID}` 删除当前会话 |
+| 任务创建 | 提交 prompt 和 metadata，支持 Agent 开关 |
+| SSE | 订阅选中任务事件，支持 `last_event_id` 续传和 event_id 去重 |
+| Agent 轨迹 | 展示工具轨迹、浏览结果、记忆命中、审批状态、最终回答 |
+| 审批恢复 | paused 任务可 approve 并恢复执行 |
+| 取消 | 支持单任务取消和批量取消 |
+| 死信 | 管理员查看死信并重放 |
+| 记忆 | 通过事件展示 memory_recall/memory_write，当前没有完整记忆管理页面 |
 
-## 7. 当前限制
+## 数据刷新
 
-1. App.tsx 体量较大，职责较多。
-2. 状态管理以 useState/useMemo 为主，复杂度已较高。
-3. 尚未引入组件级自动化测试。
+| 数据 | 策略 |
+|---|---|
+| 健康状态 | 10 秒轮询 |
+| 任务列表 | 4 秒轮询 |
+| 当前任务详情 | 1.5 秒轮询，作为 SSE 兜底 |
+| 死信列表 | 5 秒轮询，仅运维视图 |
+| SSE | 选中任务后连接，收到 terminal 后关闭 |
 
-## 8. 演进建议
+## 调用接口
 
-1. 按业务域拆分组件与 hooks（auth/task/chat/ops）。
-2. 引入统一数据层（如 React Query）。
-3. 增加关键交互 E2E 用例（创建任务、取消、重放）。
+| 接口 | 用途 |
+|---|---|
+| `GET /healthz` | 健康状态 |
+| `POST /v1/auth/register` | 注册 |
+| `POST /v1/auth/login` | 登录 |
+| `POST /v1/auth/logout` | 退出 |
+| `GET /v1/auth/me` | 当前用户 |
+| `POST /v1/tasks` | 创建任务 |
+| `GET /v1/tasks` | 列任务 |
+| `GET /v1/tasks/{taskID}` | 任务详情 |
+| `GET /v1/tasks/{taskID}/events` | SSE |
+| `POST /v1/tasks/{taskID}/cancel` | 单任务取消 |
+| `POST /v1/tasks/cancel` | 批量取消 |
+| `POST /v1/tasks/{taskID}/approve` | 审批恢复 |
+| `POST /v1/tasks/{taskID}/replay` | 任务重放 |
+| `DELETE /v1/conversations/{conversationID}` | 删除会话 |
+| `GET /v1/dead-letters` | 死信列表 |
+
+## 权限行为
+
+1. 非管理员不能进入运维视图。
+2. 普通用户只能看到自己的任务。
+3. 管理员可查看全局任务和死信。
+4. 后端是权限最终裁决方，前端只做体验层控制。
+
+## 当前限制
+
+| 限制 | 建议 |
+|---|---|
+| `App.tsx` 较大 | 拆分 auth/chat/ops/agent/workbench hooks 和组件 |
+| 没有前端测试 | 增加关键交互 E2E 和组件测试 |
+| 未容器化 | 增加 Web Dockerfile 或静态托管说明 |
+| 没有完整记忆管理页面 | 可增加记忆列表、召回、删除 UI |
+| 状态管理复杂 | 可引入 React Query 等数据层 |

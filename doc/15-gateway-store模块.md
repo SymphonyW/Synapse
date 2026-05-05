@@ -16,9 +16,10 @@ TaskStore 接口覆盖：
 
 1. 任务 CRUD 与状态更新
 2. 任务 metadata 合并更新（UpdateMetadata）
-3. 事件追加与增量读取
-4. 死信记录与查询
-5. 用户与会话管理
+3. 按 conversation_id 读取和删除会话任务
+4. 事件追加与增量读取
+5. 死信记录与查询
+6. 用户与会话管理
 
 该抽象使 API 与 Worker 可以独立于存储实现开发和测试。
 
@@ -28,6 +29,7 @@ TaskStore 接口覆盖：
 2. 适合测试与开发回退。
 3. 事件 ID 在进程内递增。
 4. 重启后数据丢失。
+5. DeleteTasksByConversation 会删除任务、事件和死信。
 
 ## 4. PostgresStore 特点
 
@@ -36,6 +38,7 @@ TaskStore 接口覆盖：
 3. task_events 使用 (task_id, id) 索引支撑 SSE 增量读取。
 4. auth_sessions 具备过期索引便于清理。
 5. UpdateMetadata 采用“先读取再合并再写回”的方式，空值会删除对应 key。
+6. DeleteTasksByConversation 利用 tasks 外键级联删除事件与死信记录。
 
 ## 5. 数据表概览
 
@@ -51,6 +54,7 @@ TaskStore 接口覆盖：
 2. MarkDeadLetter 采用 UPSERT，记录最新失败原因和尝试次数。
 3. 会话查询只返回未过期会话。
 4. UpdateMetadata 对 key 做 trim，空 key 忽略，空 value 表示删除；用于审批恢复元数据写入。
+5. ListTasksByConversation 只读取指定用户与会话，按创建时间升序返回，供会话上下文构建。
 
 ## 7. 生产建议
 

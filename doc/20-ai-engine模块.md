@@ -72,6 +72,19 @@ openai 模式细节：
 4. 对 429、500、502、503、504 和网络错误做有限重试。
 5. 支持 `model_messages_json` 作为多轮 messages 输入。
 
+长文本生成细节：
+
+| 机制 | 行为 |
+|---|---|
+| 长文本识别 | 用户请求详细讲解、完整说明、报告、长文等需求时启用 |
+| 完成标记 | Runtime 向模型注入内部 `[[SYNAPSE_DONE]]` 协议，并在输出给用户前过滤 |
+| 完整性检查 | 未达到 `SYNAPSE_OPENAI_LONG_FORM_MIN_CHARS`、代码块未闭合、结尾不是自然终止，或用户要求结论但尾部没有 conclusion/summary/总结/结论时继续 |
+| 截断续写 | `finish_reason=length`、`max_tokens`、`stream_error` 会自动续写 |
+| 供应商中断 | 长文本已有可见内容时，`content_filter`、`safety`、`sensitive`、`blocked` 视为可续写中断；无内容或短问仍终止 |
+| 续写上限 | 由 `SYNAPSE_OPENAI_CONTINUATION_MAX_ROUNDS` 控制，防止无限循环 |
+
+该能力不是针对中文的特殊分支，而是根据用户需求判断是否需要长文本，并用 provider 通用的 stream、finish_reason、内部完成标记和完整性检查来补全回复。
+
 ## Agent loop
 
 Agent loop 由 [runtime.py](../services/ai-engine-py/app/runtime.py) 实现。

@@ -60,6 +60,7 @@ OPENAI_TERMINAL_RESPONSE_CHARS = (
     "\"",
     "'",
 )
+OPENAI_STRONG_TERMINAL_RESPONSE_CHARS = OPENAI_TERMINAL_RESPONSE_CHARS[:9]
 
 
 @dataclass(frozen=True)
@@ -3134,6 +3135,8 @@ class AgentRuntime:
         metadata: dict[str, str] | None,
         accumulated_response: str,
         long_form_request: bool,
+        interruption_reason: str = "",
+        interrupted_round_count: int = 0,
     ) -> dict[str, str]:
         generation_metadata = self._build_openai_generation_metadata(
             original_prompt,
@@ -3145,12 +3148,27 @@ class AgentRuntime:
         if len(partial_response) > 12000:
             partial_response = partial_response[-12000:]
 
+        interruption_instruction = ""
+        if self._is_interrupted_openai_finish_reason(interruption_reason):
+            interruption_instruction = (
+                "The provider ended the previous stream before a natural stopping point. "
+                "Do not repeat the interrupted fragment. Continue with the next safe, "
+                "high-level part of the answer, then close the remaining requested "
+                "sections cleanly. "
+            )
+            if interrupted_round_count >= 2:
+                interruption_instruction += (
+                    "Avoid drilling into the repeatedly interrupted example; summarize "
+                    "that area at a neutral, high level and move to impacts and conclusion. "
+                )
+
         continuation_messages = [
             *messages,
             {"role": "assistant", "content": partial_response},
             {
                 "role": "user",
                 "content": (
+                    f"{interruption_instruction}"
                     "Continue directly from the previous answer. Do not repeat earlier "
                     "content and do not restart. Write substantial new content, continue "
                     "the next incomplete section, and include later requested sections "
@@ -3171,6 +3189,21 @@ class AgentRuntime:
             separators=(",", ":"),
         )
         return continuation_metadata
+
+    def _trim_incomplete_openai_fragment(self, text: str) -> str:
+        stripped = text.rstrip()
+        if not stripped:
+            return ""
+        if stripped.endswith(OPENAI_TERMINAL_RESPONSE_CHARS):
+            return text
+
+        last_terminal_index = max(
+            stripped.rfind(mark) for mark in OPENAI_STRONG_TERMINAL_RESPONSE_CHARS
+        )
+        if last_terminal_index < 0:
+            return ""
+
+        return stripped[: last_terminal_index + 1]
 
     def _trim_continuation_overlap(self, existing_text: str, continuation_text: str) -> str:
         if not existing_text or not continuation_text:

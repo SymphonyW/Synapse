@@ -213,7 +213,7 @@ postgres://synapse:synapse@postgres:5432/synapse?sslmode=disable
 本地 Gateway 连接 Docker Postgres 时使用：
 
 ```powershell
-$env:SYNAPSE_DATABASE_URL = "postgres://synapse:synapse@127.0.0.1:5432/synapse?sslmode=disable"
+$env:SYNAPSE_DATABASE_URL = "postgres://synapse:synapse@127.0.0.1:15432/synapse?sslmode=disable"
 $env:SYNAPSE_REDIS_ADDR = "127.0.0.1:6379"
 ```
 
@@ -238,7 +238,7 @@ docker compose up --build -d
 启动 Web：
 
 ```powershell
-Set-Location apps/web
+cd apps/web
 npm install
 npm run dev
 ```
@@ -250,7 +250,7 @@ npm run dev
 | Web | http://127.0.0.1:5173 |
 | Gateway API | http://127.0.0.1:8080 |
 | AI Engine gRPC | 127.0.0.1:50051 |
-| Postgres | 127.0.0.1:5432 |
+| Postgres | 127.0.0.1:15432 |
 | Redis | 127.0.0.1:6379 |
 
 停止：
@@ -285,6 +285,13 @@ Copy-Item docker-compose.zhipu.env.example docker-compose.zhipu.env
 .\scripts\dev.ps1 -Task up-zhipu
 ```
 
+长文本回复说明：
+
+1. `openai` 兼容通道会识别详细讲解、完整报告、长文等长文本需求，并自动启用续写协议。
+2. Runtime 会隐藏内部完成标记，按 `SYNAPSE_OPENAI_LONG_FORM_MIN_CHARS` 和回答完整性判断是否继续。
+3. 如果 provider 返回 `length`、`max_tokens`、流式中断，或长文本输出已有内容但被供应商标记为 `sensitive` / `content_filter`，Runtime 会在 `SYNAPSE_OPENAI_CONTINUATION_MAX_ROUNDS` 范围内继续补全。
+4. Compose 默认把 Gateway 执行超时和 HTTP 写超时调到 `300s`，用于承载更长的 SSE 输出。
+
 镜像源组合：
 
 ```powershell
@@ -299,9 +306,9 @@ Copy-Item docker-compose.mirror.env.example docker-compose.mirror.env
 安装前端依赖：
 
 ```powershell
-Set-Location apps/web
+cd apps/web
 npm install
-Set-Location ..\..
+cd ..\..
 ```
 
 安装 Python 依赖：
@@ -322,7 +329,7 @@ docker compose up -d postgres redis
 设置本地 Gateway 环境变量：
 
 ```powershell
-$env:SYNAPSE_DATABASE_URL = "postgres://synapse:synapse@127.0.0.1:5432/synapse?sslmode=disable"
+$env:SYNAPSE_DATABASE_URL = "postgres://synapse:synapse@127.0.0.1:15432/synapse?sslmode=disable"
 $env:SYNAPSE_REDIS_ADDR = "127.0.0.1:6379"
 $env:SYNAPSE_AI_ENGINE_ADDR = "127.0.0.1:50051"
 ```

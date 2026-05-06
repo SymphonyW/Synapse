@@ -19,9 +19,13 @@ class Config:
     openai_http_timeout_seconds: float
     openai_max_retries: int
     openai_retry_backoff_seconds: float
+    openai_continuation_max_rounds: int
+    openai_long_form_min_chars: int
     # Agent runtime controls.
     agent_enabled_default: bool
     agent_max_plan_steps: int
+    agent_generation_timeout_seconds: float
+    agent_stream_idle_timeout_seconds: float
     agent_require_approval_for_high_risk: bool
     agent_memory_file: str
     agent_memory_max_entries_per_user: int
@@ -82,10 +86,22 @@ def load_config() -> Config:
         openai_retry_backoff_seconds=_read_float(
             os.getenv("SYNAPSE_OPENAI_RETRY_BACKOFF_SECONDS", "1.5"), 1.5
         ),
+        openai_continuation_max_rounds=_read_int(
+            os.getenv("SYNAPSE_OPENAI_CONTINUATION_MAX_ROUNDS", "8"), 8
+        ),
+        openai_long_form_min_chars=_read_int(
+            os.getenv("SYNAPSE_OPENAI_LONG_FORM_MIN_CHARS", "2400"), 2400
+        ),
         agent_enabled_default=_read_bool(
             os.getenv("SYNAPSE_AGENT_ENABLED_DEFAULT", "true"), True
         ),
         agent_max_plan_steps=_read_int(os.getenv("SYNAPSE_AGENT_MAX_PLAN_STEPS", "6"), 6),
+        agent_generation_timeout_seconds=_read_float(
+            os.getenv("SYNAPSE_AGENT_GENERATION_TIMEOUT_SECONDS", "30"), 30.0
+        ),
+        agent_stream_idle_timeout_seconds=_read_float(
+            os.getenv("SYNAPSE_AGENT_STREAM_IDLE_TIMEOUT_SECONDS", "15"), 15.0
+        ),
         agent_require_approval_for_high_risk=_read_bool(
             os.getenv("SYNAPSE_AGENT_REQUIRE_APPROVAL_FOR_HIGH_RISK", "true"), True
         ),

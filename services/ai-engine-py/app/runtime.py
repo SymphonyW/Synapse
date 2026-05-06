@@ -42,6 +42,24 @@ AGENT_INFO_SCHEMA = "synapse.agent.info.v1"
 BROWSER_MAX_CONTENT_BYTES = 128 * 1024
 BROWSER_OUTPUT_TEXT_LIMIT = 2400
 BROWSER_USER_AGENT = "synapse-agent-browser/1.0"
+OPENAI_DONE_MARKER = "[[SYNAPSE_DONE]]"
+OPENAI_INTERRUPTED_FINISH_REASONS = {"content_filter", "safety", "sensitive", "blocked"}
+OPENAI_TERMINAL_RESPONSE_CHARS = (
+    ".",
+    "!",
+    "?",
+    ";",
+    "\u3002",
+    "\uff01",
+    "\uff1f",
+    "\uff1b",
+    "\u2026",
+    "]",
+    ")",
+    "}",
+    "\"",
+    "'",
+)
 
 
 @dataclass(frozen=True)
@@ -49,6 +67,56 @@ class RuntimeStreamItem:
     kind: str
     message: str = ""
     token: str = ""
+
+
+@dataclass(frozen=True)
+class OpenAIStreamItem:
+    content: str = ""
+    finish_reason: str = ""
+
+
+@dataclass(frozen=True)
+class OpenAICompletionResult:
+    content: str = ""
+    finish_reason: str = ""
+
+
+class OpenAIDoneMarkerBuffer:
+    def __init__(self, marker: str) -> None:
+        self._marker = marker
+        self._buffer = ""
+        self.done = False
+
+    def feed(self, text: str) -> list[str]:
+        if self.done or not text:
+            return []
+
+        self._buffer += text
+        marker_index = self._buffer.find(self._marker)
+        if marker_index >= 0:
+            visible = self._buffer[:marker_index]
+            self._buffer = ""
+            self.done = True
+            return [visible] if visible else []
+
+        keep = max(0, len(self._marker) - 1)
+        if len(self._buffer) <= keep:
+            return []
+
+        visible = self._buffer[:-keep]
+        self._buffer = self._buffer[-keep:]
+        return [visible] if visible else []
+
+    def flush(self) -> list[str]:
+        if self.done:
+            self._buffer = ""
+            return []
+
+        visible = self._buffer
+        self._buffer = ""
+        if self._marker.startswith(visible):
+            return []
+        return [visible] if visible else []
 
 
 @dataclass(frozen=True)
@@ -134,8 +202,12 @@ class AgentRuntime:
         openai_http_timeout_seconds: float = 45.0,
         openai_max_retries: int = 3,
         openai_retry_backoff_seconds: float = 1.5,
+        openai_continuation_max_rounds: int = 8,
+        openai_long_form_min_chars: int = 2400,
         agent_enabled_default: bool = True,
         agent_max_plan_steps: int = 6,
+        agent_generation_timeout_seconds: float = 30.0,
+        agent_stream_idle_timeout_seconds: float = 15.0,
         agent_require_approval_for_high_risk: bool = True,
         agent_memory_file: str = "",
         agent_memory_max_entries_per_user: int = 80,
@@ -165,11 +237,13 @@ class AgentRuntime:
         self._openai_http_timeout_seconds = max(5.0, openai_http_timeout_seconds)
         self._openai_max_retries = max(1, openai_max_retries)
         self._openai_retry_backoff_seconds = max(0.2, openai_retry_backoff_seconds)
-        self._agent_generation_timeout_seconds = min(
-            30.0, max(15.0, self._openai_http_timeout_seconds * 0.55)
-        )
+        self._openai_continuation_max_rounds = max(0, openai_continuation_max_rounds)
+        self._openai_long_form_min_chars = max(0, openai_long_form_min_chars)
+        self._agent_generation_timeout_seconds = max(6.0, agent_generation_timeout_seconds)
+        self._agent_stream_idle_timeout_seconds = max(2.0, agent_stream_idle_timeout_seconds)
         self._agent_rescue_timeout_seconds = min(
-            14.0, max(8.0, self._openai_http_timeout_seconds * 0.3)
+            self._agent_generation_timeout_seconds,
+            max(8.0, self._agent_generation_timeout_seconds * 0.35),
         )
         self._agent_enabled_default = agent_enabled_default
         self._agent_max_plan_steps = max(1, agent_max_plan_steps)
@@ -2516,27 +2590,140 @@ class AgentRuntime:
         if not normalized_prompt:
             normalized_prompt = "empty request"
 
-        emitted_any = False
-        try:
-            async for chunk in self._request_openai_stream_async(
-                normalized_prompt, metadata
-            ):
-                emitted_any = True
-                yield chunk
-        except Exception:
-            if emitted_any:
-                raise
+        accumulated = ""
+        round_index = 0
+        current_prompt = normalized_prompt
+        long_form_request = self._is_long_form_request(normalized_prompt, metadata)
+        marker_buffer = OpenAIDoneMarkerBuffer(OPENAI_DONE_MARKER) if long_form_request else None
+        interrupted_round_count = 0
+        current_metadata = self._build_openai_generation_metadata(
+            normalized_prompt,
+            metadata,
+            long_form_request=long_form_request,
+        )
 
-            # 兼容不支持 stream=true 的 OpenAI 兼容网关，降级到普通 completions。
-            response_text = await asyncio.to_thread(
-                self._request_openai_completion, normalized_prompt, metadata
-            )
-            if not response_text:
-                yield "(empty response)"
+        while True:
+            round_chunks: list[str] = []
+            finish_reason = ""
+            emitted_this_round = False
+
+            try:
+                async for item in self._request_openai_stream_async(
+                    current_prompt, current_metadata
+                ):
+                    if item.finish_reason:
+                        finish_reason = item.finish_reason
+                    if not item.content:
+                        continue
+
+                    emitted_this_round = True
+                    if round_index == 0:
+                        for visible_chunk in self._filter_openai_visible_chunks(
+                            marker_buffer,
+                            item.content,
+                        ):
+                            accumulated += visible_chunk
+                            yield visible_chunk
+                    else:
+                        round_chunks.append(item.content)
+            except Exception:
+                if emitted_this_round or accumulated:
+                    if long_form_request and round_index < self._openai_continuation_max_rounds:
+                        finish_reason = "stream_error"
+                    else:
+                        for visible_chunk in self._flush_openai_visible_chunks(marker_buffer):
+                            accumulated += visible_chunk
+                            yield visible_chunk
+                        raise
+
+                if finish_reason == "stream_error":
+                    pass
+                else:
+                    result = await asyncio.to_thread(
+                        self._request_openai_completion_result,
+                        current_prompt,
+                        current_metadata,
+                    )
+                    finish_reason = result.finish_reason
+                    if not result.content:
+                        yield "(empty response)"
+                        return
+
+                    if round_index == 0:
+                        for chunk in self._chunk_text(result.content):
+                            for visible_chunk in self._filter_openai_visible_chunks(
+                                marker_buffer,
+                                chunk,
+                            ):
+                                accumulated += visible_chunk
+                                yield visible_chunk
+                    else:
+                        round_chunks.append(result.content)
+
+            for visible_chunk in self._flush_openai_visible_chunks(marker_buffer):
+                accumulated += visible_chunk
+                yield visible_chunk
+
+            if marker_buffer is not None and marker_buffer.done:
+                if self._is_long_form_completion_acceptable(accumulated, normalized_prompt):
+                    return
+                if round_index >= self._openai_continuation_max_rounds:
+                    return
+                marker_buffer = OpenAIDoneMarkerBuffer(OPENAI_DONE_MARKER)
+                finish_reason = "premature_done_marker"
+
+            if round_index > 0 and round_chunks:
+                round_text = "".join(round_chunks)
+                continuation_text = self._trim_continuation_overlap(
+                    accumulated, round_text
+                )
+                if self._is_interrupted_openai_finish_reason(finish_reason):
+                    continuation_text = self._trim_incomplete_openai_fragment(
+                        continuation_text
+                    )
+                if continuation_text:
+                    for chunk in self._chunk_text(continuation_text):
+                        for visible_chunk in self._filter_openai_visible_chunks(
+                            marker_buffer,
+                            chunk,
+                        ):
+                            accumulated += visible_chunk
+                            yield visible_chunk
+
+            for visible_chunk in self._flush_openai_visible_chunks(marker_buffer):
+                accumulated += visible_chunk
+                yield visible_chunk
+
+            if marker_buffer is not None and marker_buffer.done:
+                if self._is_long_form_completion_acceptable(accumulated, normalized_prompt):
+                    return
+                if round_index >= self._openai_continuation_max_rounds:
+                    return
+                marker_buffer = OpenAIDoneMarkerBuffer(OPENAI_DONE_MARKER)
+                finish_reason = "premature_done_marker"
+
+            if not self._should_continue_openai_response(
+                accumulated,
+                finish_reason,
+                round_index,
+                long_form_request=long_form_request,
+                done_marker_seen=marker_buffer.done if marker_buffer is not None else False,
+            ):
                 return
 
-            for chunk in self._chunk_text(response_text):
-                yield chunk
+            if self._is_interrupted_openai_finish_reason(finish_reason):
+                interrupted_round_count += 1
+
+            round_index += 1
+            current_prompt = self._build_openai_continuation_prompt(normalized_prompt)
+            current_metadata = self._build_openai_continuation_metadata(
+                normalized_prompt,
+                metadata,
+                accumulated,
+                long_form_request=long_form_request,
+                interruption_reason=finish_reason,
+                interrupted_round_count=interrupted_round_count,
+            )
 
     async def _run_prompt_with_timeout(
         self,
@@ -2550,7 +2737,7 @@ class AgentRuntime:
             return
 
         first_token_timeout = max(6.0, timeout_seconds)
-        idle_timeout = min(15.0, max(6.0, timeout_seconds * 0.5))
+        idle_timeout = max(2.0, self._agent_stream_idle_timeout_seconds)
         iterator = self.run_prompt(prompt, metadata).__aiter__()
         got_any_chunk = False
         current_timeout = first_token_timeout
@@ -2575,7 +2762,7 @@ class AgentRuntime:
 
     async def _request_openai_stream_async(
         self, prompt: str, metadata: dict[str, str] | None = None
-    ) -> AsyncIterator[str]:
+    ) -> AsyncIterator[OpenAIStreamItem]:
         queue: asyncio.Queue[object] = asyncio.Queue()
         sentinel = object()
         loop = asyncio.get_running_loop()
@@ -2585,9 +2772,9 @@ class AgentRuntime:
 
         def worker() -> None:
             try:
-                for chunk in self._request_openai_stream_with_retry(prompt, metadata):
-                    if chunk:
-                        push(chunk)
+                for item in self._request_openai_stream_with_retry(prompt, metadata):
+                    if item.content or item.finish_reason:
+                        push(item)
             except Exception as exc:  # pragma: no cover - runtime 兜底分支
                 push(exc)
             finally:
@@ -2601,11 +2788,12 @@ class AgentRuntime:
                 return
             if isinstance(item, Exception):
                 raise item
-            yield str(item)
+            if isinstance(item, OpenAIStreamItem):
+                yield item
 
     def _request_openai_stream_with_retry(
         self, prompt: str, metadata: dict[str, str] | None = None
-    ) -> Iterator[str]:
+    ) -> Iterator[OpenAIStreamItem]:
         endpoint = self._openai_base_url.strip() or "https://api.openai.com/v1"
         endpoint = endpoint.rstrip("/") + "/chat/completions"
         payload = self._build_openai_payload(prompt, stream=True, metadata=metadata)
@@ -2629,9 +2817,9 @@ class AgentRuntime:
             emitted_any = False
             try:
                 with urllib_request.urlopen(request, timeout=self._openai_http_timeout_seconds) as response:
-                    for chunk in self._iter_openai_sse_chunks(response):
+                    for item in self._iter_openai_sse_items(response):
                         emitted_any = True
-                        yield chunk
+                        yield item
                     return
             except urllib_error.HTTPError as exc:
                 body = exc.read().decode("utf-8", errors="ignore")
@@ -2652,7 +2840,7 @@ class AgentRuntime:
             raise RuntimeError(f"openai stream request failed: {last_error}")
         raise RuntimeError("openai stream request failed: unknown error")
 
-    def _iter_openai_sse_chunks(self, response: Any) -> Iterator[str]:
+    def _iter_openai_sse_items(self, response: Any) -> Iterator[OpenAIStreamItem]:
         while True:
             raw_line = response.readline()
             if not raw_line:
@@ -2676,22 +2864,27 @@ class AgentRuntime:
             if isinstance(payload, dict) and payload.get("error"):
                 raise RuntimeError(f"openai stream request failed: {payload['error']}")
 
-            chunk = self._extract_stream_chunk(payload)
-            if chunk:
-                yield chunk
+            item = self._extract_stream_item(payload)
+            if item.content or item.finish_reason:
+                yield item
 
-    def _extract_stream_chunk(self, payload: Any) -> str:
+    def _extract_stream_item(self, payload: Any) -> OpenAIStreamItem:
         if not isinstance(payload, dict):
-            return ""
+            return OpenAIStreamItem()
 
         choices = payload.get("choices")
         if not isinstance(choices, list):
-            return ""
+            return OpenAIStreamItem()
 
         fragments: list[str] = []
+        finish_reason = ""
         for choice in choices:
             if not isinstance(choice, dict):
                 continue
+
+            raw_finish_reason = choice.get("finish_reason")
+            if isinstance(raw_finish_reason, str) and raw_finish_reason.strip():
+                finish_reason = raw_finish_reason.strip()
 
             delta = choice.get("delta")
             if not isinstance(delta, dict):
@@ -2701,7 +2894,10 @@ class AgentRuntime:
             if chunk:
                 fragments.append(chunk)
 
-        return "".join(fragments)
+        return OpenAIStreamItem(
+            content="".join(fragments),
+            finish_reason=finish_reason,
+        )
 
     def _normalize_content(self, value: Any) -> str:
         if isinstance(value, str):
@@ -2731,12 +2927,261 @@ class AgentRuntime:
         return ""
 
     def _chunk_text(self, text: str, chunk_size: int = 12) -> Iterator[str]:
-        normalized = text.strip()
-        if not normalized:
+        if not text.strip():
             return
 
-        for start in range(0, len(normalized), chunk_size):
-            yield normalized[start : start + chunk_size]
+        for start in range(0, len(text), chunk_size):
+            yield text[start : start + chunk_size]
+
+    def _should_continue_openai_response(
+        self,
+        response_text: str,
+        finish_reason: str,
+        completed_rounds: int,
+        long_form_request: bool,
+        done_marker_seen: bool,
+    ) -> bool:
+        _ = response_text
+        if done_marker_seen:
+            return False
+        if completed_rounds >= self._openai_continuation_max_rounds:
+            return False
+
+        normalized_reason = finish_reason.strip().lower()
+        if normalized_reason in {"length", "max_tokens", "stream_error"}:
+            return True
+        if self._is_interrupted_openai_finish_reason(normalized_reason):
+            return long_form_request and bool(response_text.strip())
+        if normalized_reason in {"tool_calls", "function_call"}:
+            return False
+
+        return long_form_request
+
+    def _is_interrupted_openai_finish_reason(self, finish_reason: str) -> bool:
+        return finish_reason.strip().lower() in OPENAI_INTERRUPTED_FINISH_REASONS
+
+    def _is_long_form_budget_satisfied(self, response_text: str) -> bool:
+        return len(response_text.strip()) >= self._openai_long_form_min_chars
+
+    def _is_long_form_completion_acceptable(self, response_text: str, prompt: str) -> bool:
+        text = response_text.strip()
+        if not self._is_long_form_budget_satisfied(text):
+            return False
+        if text.count("```") % 2 == 1:
+            return False
+
+        if not text.endswith(OPENAI_TERMINAL_RESPONSE_CHARS):
+            return False
+
+        last_words = re.findall(r"[A-Za-z]+", text[-80:].lower())
+        if last_words and last_words[-1] in {
+            "a",
+            "an",
+            "and",
+            "as",
+            "at",
+            "by",
+            "for",
+            "from",
+            "in",
+            "into",
+            "of",
+            "on",
+            "or",
+            "the",
+            "to",
+            "under",
+            "with",
+        }:
+            return False
+
+        prompt_lower = prompt.lower()
+        wants_conclusion = any(
+            marker in prompt_lower
+            for marker in ("conclusion", "summary", "summarize", "总结", "结论")
+        )
+        if wants_conclusion:
+            conclusion_tail = text[-1600:].lower()
+            if not any(
+                marker in conclusion_tail
+                for marker in ("conclusion", "summary", "in conclusion", "to conclude", "总结", "结论")
+            ):
+                return False
+
+        return True
+
+    def _build_openai_continuation_prompt(self, original_prompt: str) -> str:
+        _ = original_prompt
+        return "Continue the previous answer without repeating earlier content."
+
+    def _filter_openai_visible_chunks(
+        self,
+        marker_buffer: OpenAIDoneMarkerBuffer | None,
+        text: str,
+    ) -> list[str]:
+        if marker_buffer is None:
+            return [text] if text else []
+        return marker_buffer.feed(text)
+
+    def _flush_openai_visible_chunks(
+        self,
+        marker_buffer: OpenAIDoneMarkerBuffer | None,
+    ) -> list[str]:
+        if marker_buffer is None:
+            return []
+        return marker_buffer.flush()
+
+    def _is_long_form_request(
+        self,
+        prompt: str,
+        metadata: dict[str, str] | None = None,
+    ) -> bool:
+        candidates = [prompt]
+        if metadata:
+            user_message = metadata.get(METADATA_CLIENT_USER_MESSAGE_KEY, "")
+            if user_message:
+                candidates.append(user_message)
+
+        text = " ".join(candidates).strip().lower()
+        if len(text) >= 800:
+            return True
+
+        long_form_markers = (
+            "detailed",
+            "detail",
+            "in depth",
+            "in-depth",
+            "comprehensive",
+            "thorough",
+            "long-form",
+            "long form",
+            "long answer",
+            "essay",
+            "full explanation",
+            "complete explanation",
+            "deep dive",
+            "elaborate",
+            "explain fully",
+            "walk through",
+            "write an article",
+            "report",
+            "详细",
+            "深入",
+            "全面",
+            "完整",
+            "长文",
+            "展开",
+            "详解",
+            "讲讲",
+            "系统地",
+            "文章",
+            "报告",
+        )
+        return any(marker in text for marker in long_form_markers)
+
+    def _build_openai_generation_metadata(
+        self,
+        prompt: str,
+        metadata: dict[str, str] | None,
+        long_form_request: bool,
+    ) -> dict[str, str] | None:
+        if not long_form_request:
+            return metadata
+
+        messages = self._build_openai_messages(prompt, metadata)
+        messages = self._prepend_openai_system_addendum(
+            messages,
+            (
+                "Honor the user's requested depth and length. This is a long-form "
+                "generation request: provide a complete, structured answer with enough "
+                "detail to satisfy the request. Use clear sections and cover every "
+                "aspect the user asks for. Do not shorten the answer for brevity. "
+                f"Unless the user asks for a shorter response, aim for at least "
+                f"{self._openai_long_form_min_chars} characters before concluding. "
+                "If you cannot finish in one model response, stop without a conclusion "
+                "and wait for the runtime to ask you to continue. "
+                f"When the answer is fully complete, append {OPENAI_DONE_MARKER} exactly "
+                "once at the very end. The marker is for the runtime and must not be "
+                "explained."
+            ),
+        )
+        generation_metadata = dict(metadata or {})
+        generation_metadata[MODEL_MESSAGES_METADATA_KEY] = json.dumps(
+            messages,
+            ensure_ascii=False,
+            separators=(",", ":"),
+        )
+        return generation_metadata
+
+    def _prepend_openai_system_addendum(
+        self,
+        messages: list[dict[str, str]],
+        addendum: str,
+    ) -> list[dict[str, str]]:
+        if not messages:
+            return [{"role": "system", "content": addendum}]
+
+        normalized = [dict(item) for item in messages]
+        if normalized[0].get("role") == "system":
+            normalized[0]["content"] = f"{normalized[0].get('content', '')}\n\n{addendum}"
+            return normalized
+
+        return [{"role": "system", "content": addendum}, *normalized]
+
+    def _build_openai_continuation_metadata(
+        self,
+        original_prompt: str,
+        metadata: dict[str, str] | None,
+        accumulated_response: str,
+        long_form_request: bool,
+    ) -> dict[str, str]:
+        generation_metadata = self._build_openai_generation_metadata(
+            original_prompt,
+            metadata,
+            long_form_request=long_form_request,
+        )
+        messages = self._build_openai_messages(original_prompt, generation_metadata)
+        partial_response = accumulated_response.strip()
+        if len(partial_response) > 12000:
+            partial_response = partial_response[-12000:]
+
+        continuation_messages = [
+            *messages,
+            {"role": "assistant", "content": partial_response},
+            {
+                "role": "user",
+                "content": (
+                    "Continue directly from the previous answer. Do not repeat earlier "
+                    "content and do not restart. Write substantial new content, continue "
+                    "the next incomplete section, and include later requested sections "
+                    "and the conclusion if they have not been covered yet. "
+                    f"The current answer has about {len(accumulated_response.strip())} "
+                    f"characters; the target minimum is {self._openai_long_form_min_chars}. "
+                    f"Do not append {OPENAI_DONE_MARKER} until the complete answer reaches "
+                    "that target and all requested aspects are covered. If the answer is "
+                    f"fully complete after this continuation, append {OPENAI_DONE_MARKER} "
+                    "exactly once at the very end."
+                ),
+            },
+        ]
+        continuation_metadata = dict(metadata or {})
+        continuation_metadata[MODEL_MESSAGES_METADATA_KEY] = json.dumps(
+            continuation_messages,
+            ensure_ascii=False,
+            separators=(",", ":"),
+        )
+        return continuation_metadata
+
+    def _trim_continuation_overlap(self, existing_text: str, continuation_text: str) -> str:
+        if not existing_text or not continuation_text:
+            return continuation_text
+
+        existing_tail = existing_text[-1000:]
+        max_overlap = min(len(existing_tail), len(continuation_text), 400)
+        for size in range(max_overlap, 19, -1):
+            if existing_tail.endswith(continuation_text[:size]):
+                return continuation_text[size:]
+        return continuation_text
 
     def _build_openai_payload(
         self,
@@ -2797,6 +3242,11 @@ class AgentRuntime:
     def _request_openai_completion(
         self, prompt: str, metadata: dict[str, str] | None = None
     ) -> str:
+        return self._request_openai_completion_result(prompt, metadata).content
+
+    def _request_openai_completion_result(
+        self, prompt: str, metadata: dict[str, str] | None = None
+    ) -> OpenAICompletionResult:
         endpoint = self._openai_base_url.strip() or "https://api.openai.com/v1"
         endpoint = endpoint.rstrip("/") + "/chat/completions"
 
@@ -2807,9 +3257,15 @@ class AgentRuntime:
 
         choices = response_payload.get("choices") or []
         if not choices:
-            return ""
+            return OpenAICompletionResult()
 
-        message = choices[0].get("message") or {}
+        choice = choices[0]
+        finish_reason = ""
+        raw_finish_reason = choice.get("finish_reason")
+        if isinstance(raw_finish_reason, str):
+            finish_reason = raw_finish_reason.strip()
+
+        message = choice.get("message") or {}
         content = message.get("content", "")
         if isinstance(content, list):
             texts = []
@@ -2821,8 +3277,11 @@ class AgentRuntime:
             content = "\n".join(texts)
 
         if isinstance(content, str):
-            return content.strip()
-        return ""
+            return OpenAICompletionResult(
+                content=content.strip(),
+                finish_reason=finish_reason,
+            )
+        return OpenAICompletionResult(finish_reason=finish_reason)
 
     def _perform_request_with_retry(self, endpoint: str, data: bytes) -> dict:
         retryable_http_status = {429, 500, 502, 503, 504}

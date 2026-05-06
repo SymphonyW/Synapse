@@ -149,9 +149,9 @@ Gateway 环境变量：
 | `SYNAPSE_TASK_QUEUE` | `synapse:tasks` | Redis list 名称 |
 | `SYNAPSE_TASK_MAX_ATTEMPTS` | `3` | Worker 最大尝试次数 |
 | `SYNAPSE_TASK_RETRY_BACKOFF` | `2s` | Worker 重试退避 |
-| `SYNAPSE_TASK_EXEC_TIMEOUT` | `120s` | 单任务执行超时 |
+| `SYNAPSE_TASK_EXEC_TIMEOUT` | `120s` | 单任务执行超时，Compose 默认为 `300s` 以支持长文本 |
 | `SYNAPSE_HTTP_READ_TIMEOUT` | `15s` | HTTP 读超时 |
-| `SYNAPSE_HTTP_WRITE_TIMEOUT` | `60s` | HTTP 写超时 |
+| `SYNAPSE_HTTP_WRITE_TIMEOUT` | `60s` | HTTP 写超时，Compose 默认为 `300s` 以支持长 SSE |
 | `SYNAPSE_AUTH_ADMIN_USERNAME` | `admin` | 启动时 upsert 的管理员账号 |
 | `SYNAPSE_AUTH_ADMIN_PASSWORD` | `123456` | 管理员密码，生产必须覆盖 |
 
@@ -170,8 +170,12 @@ AI Engine 环境变量：
 | `SYNAPSE_OPENAI_HTTP_TIMEOUT_SECONDS` | `45` | 模型 HTTP 超时 |
 | `SYNAPSE_OPENAI_MAX_RETRIES` | `3` | 模型请求最大重试 |
 | `SYNAPSE_OPENAI_RETRY_BACKOFF_SECONDS` | `1.5` | 模型请求退避 |
+| `SYNAPSE_OPENAI_CONTINUATION_MAX_ROUNDS` | `8` | 长文本/截断输出的最大自动续写轮数 |
+| `SYNAPSE_OPENAI_LONG_FORM_MIN_CHARS` | `2400` | 长文本请求在接受完成标记前的最低字符预算 |
 | `SYNAPSE_AGENT_ENABLED_DEFAULT` | `true` | 默认启用 Agent loop |
 | `SYNAPSE_AGENT_MAX_PLAN_STEPS` | `6` | 最大计划步数 |
+| `SYNAPSE_AGENT_GENERATION_TIMEOUT_SECONDS` | `30` | Agent 最终回复首 token 等待超时 |
+| `SYNAPSE_AGENT_STREAM_IDLE_TIMEOUT_SECONDS` | `15` | 模型流式输出空闲超时 |
 | `SYNAPSE_AGENT_REQUIRE_APPROVAL_FOR_HIGH_RISK` | `true` | 高风险工具默认需要审批 |
 | `SYNAPSE_AGENT_MEMORY_FILE` | `/tmp/synapse-agent-memory.json` | 文件型长期记忆路径 |
 | `SYNAPSE_AGENT_MEMORY_MAX_ENTRIES_PER_USER` | `80` | 每用户最大记忆条数 |

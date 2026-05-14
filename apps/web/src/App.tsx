@@ -3,12 +3,13 @@ import type { FormEvent } from 'react'
 import ReactMarkdown from 'react-markdown'
 import remarkBreaks from 'remark-breaks'
 import remarkGfm from 'remark-gfm'
+import { MemoryPanel } from './features/memory/MemoryPanel'
 import './App.css'
 
 // 控制台展示与筛选使用的任务生命周期状态。
 type TaskStatus = 'queued' | 'running' | 'paused' | 'completed' | 'failed' | 'canceled'
 type Language = 'zh' | 'en'
-type ViewMode = 'client' | 'ops'
+type ViewMode = 'client' | 'memory' | 'ops'
 type UserRole = 'admin' | 'user'
 type AuthMode = 'login' | 'register'
 
@@ -521,7 +522,7 @@ function App() {
     }
 
     const persisted = window.localStorage.getItem(VIEW_MODE_STORAGE_KEY)
-    return persisted === 'ops' ? 'ops' : 'client'
+    return persisted === 'ops' || persisted === 'memory' ? persisted : 'client'
   })
 
   const [currentUser, setCurrentUser] = useState<SessionIdentity | null>(() =>
@@ -2386,6 +2387,55 @@ function App() {
     )
   }
 
+  if (viewMode === 'memory') {
+    return (
+      <div className="app-shell app-shell-memory">
+        <header className="topbar">
+          <div>
+            <p className="eyebrow">{tr('Synapse 记忆', 'Synapse Memory')}</p>
+            <h1>{tr('长期记忆管理', 'Long-term Memory')}</h1>
+          </div>
+          <div className="topbar-actions">
+            <div className="account-pill">
+              <div>
+                <strong>{currentUser.username}</strong>
+                <span>{isAdmin ? tr('管理员', 'admin') : tr('普通用户', 'user')}</span>
+              </div>
+              <button className="ghost small" onClick={handleLogout} type="button">
+                {tr('退出', 'Sign Out')}
+              </button>
+            </div>
+            <button className="mode-switch ghost" onClick={() => setViewMode('client')} type="button">
+              {tr('进入用户端', 'Open Client')}
+            </button>
+            {isAdmin && (
+              <button className="mode-switch ghost" onClick={() => setViewMode('ops')} type="button">
+                {tr('进入运维台', 'Open Ops Console')}
+              </button>
+            )}
+            <button
+              className="language-switch"
+              onClick={() => setLanguage((previous) => (previous === 'zh' ? 'en' : 'zh'))}
+              type="button"
+            >
+              {language === 'zh' ? 'EN' : '中文'}
+            </button>
+
+            <div className="health-card">
+              <p>{tr('网关健康状态', 'Gateway Health')}</p>
+              <strong className={statusClass(health?.status)}>{healthStatusLabel(health?.status)}</strong>
+              <span>{health?.model_provider ?? health?.error ?? tr('暂无提供方信息', 'No provider data')}</span>
+            </div>
+          </div>
+        </header>
+
+        {requestError && <p className="error-banner">{requestError}</p>}
+
+        <MemoryPanel currentUser={currentUser} language={language} />
+      </div>
+    )
+  }
+
   if (viewMode === 'client') {
     return (
       <div className="app-shell app-shell-client">
@@ -2404,6 +2454,9 @@ function App() {
                 {tr('退出', 'Sign Out')}
               </button>
             </div>
+            <button className="mode-switch ghost" onClick={() => setViewMode('memory')} type="button">
+              {tr('记忆', 'Memory')}
+            </button>
             {isAdmin ? (
               <button className="mode-switch ghost" onClick={() => setViewMode('ops')} type="button">
                 {tr('进入运维台', 'Open Ops Console')}
@@ -2704,6 +2757,9 @@ function App() {
           </div>
           <button className="mode-switch ghost" onClick={() => setViewMode('client')} type="button">
             {tr('进入用户端', 'Open Client')}
+          </button>
+          <button className="mode-switch ghost" onClick={() => setViewMode('memory')} type="button">
+            {tr('记忆', 'Memory')}
           </button>
           <button
             className="language-switch"

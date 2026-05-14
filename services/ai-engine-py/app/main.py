@@ -6,12 +6,27 @@ import grpc
 from app.config import load_config
 from app.runtime import AgentRuntime
 from app.service import AgentRuntimeService
+from app.tools import MCPToolProvider, StdioMCPAdapter
 from synapse.v1 import agent_pb2_grpc
 
 
 async def serve() -> None:
     # 从环境变量加载 Runtime 与模型提供方配置。
     config = load_config()
+    agent_tool_providers = []
+    if config.mcp_stdio_enabled:
+        agent_tool_providers.append(
+            MCPToolProvider(
+                StdioMCPAdapter(
+                    command=config.mcp_stdio_command,
+                    args=config.mcp_stdio_args,
+                    env=config.mcp_stdio_env,
+                    working_dir=config.mcp_stdio_workdir,
+                    timeout_seconds=config.mcp_stdio_timeout_seconds,
+                ),
+                name_prefix=config.mcp_tool_name_prefix,
+            )
+        )
 
     # Runtime 封装不同 provider 的 token 生成逻辑。
     runtime = AgentRuntime(
@@ -40,6 +55,7 @@ async def serve() -> None:
         agent_enable_code_execution=config.agent_enable_code_execution,
         agent_tool_policy_json=config.agent_tool_policy_json,
         agent_tool_audit_log_file=config.agent_tool_audit_log_file,
+        agent_tool_providers=tuple(agent_tool_providers),
     )
 
     # 启动异步 gRPC 服务并注册 AgentRuntime 服务实现。

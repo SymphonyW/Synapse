@@ -264,7 +264,11 @@ class MCPToolProvider:
                 continue
 
             local_name = self._prefixed_name(remote_name)
-            input_schema = descriptor.get("input_schema") or descriptor.get("schema")
+            input_schema = (
+                descriptor.get("input_schema")
+                or descriptor.get("inputSchema")
+                or descriptor.get("schema")
+            )
             if not isinstance(input_schema, dict) or not input_schema:
                 input_schema = {"type": "object", "properties": {}, "additionalProperties": True}
 

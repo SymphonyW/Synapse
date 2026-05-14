@@ -1,3 +1,4 @@
+import json
 import os
 from dataclasses import dataclass
 
@@ -35,6 +36,13 @@ class Config:
     agent_enable_code_execution: bool
     agent_tool_policy_json: str
     agent_tool_audit_log_file: str
+    mcp_stdio_enabled: bool
+    mcp_stdio_command: str
+    mcp_stdio_args: tuple[str, ...]
+    mcp_stdio_env: dict[str, str]
+    mcp_stdio_workdir: str
+    mcp_stdio_timeout_seconds: float
+    mcp_tool_name_prefix: str
 
 
 def _read_float(value: str, default: float) -> float:
@@ -68,7 +76,79 @@ def _read_csv_tuple(value: str) -> tuple[str, ...]:
     return tuple(normalized)
 
 
+def _read_json_string_tuple(value: str, env_name: str) -> tuple[str, ...]:
+    raw = (value or "").strip()
+    if not raw:
+        return ()
+
+    try:
+        decoded = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"{env_name} must be a JSON array of strings") from exc
+
+    if not isinstance(decoded, list):
+        raise ValueError(f"{env_name} must be a JSON array of strings")
+
+    items: list[str] = []
+    for item in decoded:
+        if not isinstance(item, str):
+            raise ValueError(f"{env_name} must be a JSON array of strings")
+        items.append(item)
+    return tuple(items)
+
+
+def _read_json_env(value: str, env_name: str) -> dict[str, str]:
+    raw = (value or "").strip()
+    if not raw:
+        return {}
+
+    try:
+        decoded = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"{env_name} must be a JSON object") from exc
+
+    if not isinstance(decoded, dict):
+        raise ValueError(f"{env_name} must be a JSON object")
+
+    env: dict[str, str] = {}
+    for key, item in decoded.items():
+        normalized_key = str(key).strip()
+        if not normalized_key:
+            raise ValueError(f"{env_name} keys must not be empty")
+        if isinstance(item, (dict, list)):
+            raise ValueError(f"{env_name} values must be scalar values")
+        env[normalized_key] = "" if item is None else str(item)
+    return env
+
+
 def load_config() -> Config:
+    mcp_stdio_enabled = _read_bool(os.getenv("SYNAPSE_MCP_STDIO_ENABLED", "false"), False)
+    mcp_stdio_command = os.getenv("SYNAPSE_MCP_STDIO_COMMAND", "").strip()
+    mcp_stdio_args: tuple[str, ...] = ()
+    mcp_stdio_env: dict[str, str] = {}
+    mcp_stdio_workdir = ""
+    mcp_stdio_timeout_seconds = 10.0
+    mcp_tool_name_prefix = os.getenv("SYNAPSE_MCP_TOOL_NAME_PREFIX", "mcp").strip() or "mcp"
+
+    if mcp_stdio_enabled:
+        if not mcp_stdio_command:
+            raise ValueError(
+                "SYNAPSE_MCP_STDIO_COMMAND is required when SYNAPSE_MCP_STDIO_ENABLED=true"
+            )
+        mcp_stdio_args = _read_json_string_tuple(
+            os.getenv("SYNAPSE_MCP_STDIO_ARGS_JSON", "[]"),
+            "SYNAPSE_MCP_STDIO_ARGS_JSON",
+        )
+        mcp_stdio_env = _read_json_env(
+            os.getenv("SYNAPSE_MCP_STDIO_ENV_JSON", "{}"),
+            "SYNAPSE_MCP_STDIO_ENV_JSON",
+        )
+        mcp_stdio_workdir = os.getenv("SYNAPSE_MCP_STDIO_WORKDIR", "").strip()
+        mcp_stdio_timeout_seconds = _read_float(
+            os.getenv("SYNAPSE_MCP_STDIO_TIMEOUT_SECONDS", "10"),
+            10.0,
+        )
+
     # 统一读取环境变量，保持启动流程简洁。
     return Config(
         bind_addr=os.getenv("SYNAPSE_AI_BIND_ADDR", "0.0.0.0:50051"),
@@ -126,4 +206,11 @@ def load_config() -> Config:
             "SYNAPSE_AGENT_TOOL_AUDIT_LOG_FILE",
             "/tmp/synapse-agent-tool-audit.log",
         ),
+        mcp_stdio_enabled=mcp_stdio_enabled,
+        mcp_stdio_command=mcp_stdio_command,
+        mcp_stdio_args=mcp_stdio_args,
+        mcp_stdio_env=mcp_stdio_env,
+        mcp_stdio_workdir=mcp_stdio_workdir,
+        mcp_stdio_timeout_seconds=mcp_stdio_timeout_seconds,
+        mcp_tool_name_prefix=mcp_tool_name_prefix,
     )

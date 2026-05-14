@@ -1,5 +1,7 @@
 import asyncio
 import json
+import pathlib
+import tempfile
 import unittest
 from typing import Any
 
@@ -40,22 +42,24 @@ class LocalEchoTool(BaseAgentTool):
 
 
 class FakeMCPAdapter:
-    def __init__(self) -> None:
+    def __init__(self, risk_level: str = "medium", requires_approval: bool = False) -> None:
         self.last_call: dict[str, Any] = {}
+        self.risk_level = risk_level
+        self.requires_approval = requires_approval
 
     def list_tools(self) -> list[dict[str, Any]]:
         return [
             {
                 "name": "echo",
                 "description": "Echo text from fake MCP adapter.",
-                "input_schema": {
+                "inputSchema": {
                     "type": "object",
                     "properties": {"text": {"type": "string"}},
                     "required": ["text"],
                     "additionalProperties": False,
                 },
-                "risk_level": "medium",
-                "requires_approval": False,
+                "risk_level": self.risk_level,
+                "requires_approval": self.requires_approval,
             }
         ]
 
@@ -97,6 +101,27 @@ async def _collect_runtime_infos(
         if event.kind == "info":
             infos.append(json.loads(event.message))
     return infos
+
+
+def _agent_events(infos: list[dict[str, Any]]) -> list[str]:
+    return [str(item.get("agent_event", "")) for item in infos]
+
+
+def _approved_tool_call(
+    tool_name: str,
+    tool_input: str,
+    risk_level: str = "high",
+    resume_step_index: int = 1,
+) -> str:
+    return json.dumps(
+        {
+            "tool_name": tool_name,
+            "tool_input": tool_input,
+            "risk_level": risk_level,
+            "reason": "unit test approval",
+            "resume_step_index": resume_step_index,
+        }
+    )
 
 
 class ToolProviderTests(unittest.TestCase):
@@ -203,6 +228,10 @@ class ToolProviderTests(unittest.TestCase):
         )
 
         self.assertEqual(registry.provider_for("mcp_echo"), "mcp")
+        self.assertEqual(
+            registry.schemas()["mcp_echo"]["properties"]["text"]["type"],
+            "string",
+        )
         tool = registry.get("mcp_echo")
         self.assertIsNotNone(tool)
 
@@ -252,6 +281,75 @@ class ToolProviderTests(unittest.TestCase):
         self.assertEqual(finished["payload"]["tool_provider"], "local_python")
         self.assertEqual(finished["payload"]["input_schema"]["required"], ["text"])
         self.assertEqual(finished["payload"]["output"], "local_echo result: hello plugin")
+
+    def test_runtime_mcp_high_risk_tool_requires_approval(self) -> None:
+        runtime = AgentRuntime(
+            model_provider="mock",
+            agent_tool_audit_log_file="",
+            agent_tool_providers=(
+                MCPToolProvider(FakeMCPAdapter(risk_level="high", requires_approval=True)),
+            ),
+        )
+
+        infos = asyncio.run(
+            _collect_runtime_infos(
+                runtime,
+                "use the mcp echo tool",
+                {
+                    "agent_enabled": "true",
+                    "auth_user_role": "admin",
+                    "agent_required_tool": "mcp_echo",
+                    "agent_required_tool_input": "hello mcp",
+                },
+            )
+        )
+
+        phases = _agent_events(infos)
+        self.assertIn("approval_required", phases)
+        self.assertNotIn("tool_started", phases)
+        approval = next(item for item in infos if item["agent_event"] == "approval_required")
+        self.assertEqual(approval["payload"]["tool"], "mcp_echo")
+        self.assertEqual(approval["payload"]["risk_level"], "high")
+
+    def test_runtime_mcp_tool_audit_uses_governance_chain(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            audit_path = pathlib.Path(temp_dir) / "tool-audit.jsonl"
+            adapter = FakeMCPAdapter(risk_level="high", requires_approval=True)
+            runtime = AgentRuntime(
+                model_provider="mock",
+                agent_tool_audit_log_file=str(audit_path),
+                agent_tool_providers=(MCPToolProvider(adapter),),
+            )
+
+            infos = asyncio.run(
+                _collect_runtime_infos(
+                    runtime,
+                    "use the mcp echo tool",
+                    {
+                        "agent_enabled": "true",
+                        "auth_user_role": "admin",
+                        "approved_tool_call": _approved_tool_call("mcp_echo", "hello mcp"),
+                        "agent_required_tool": "mcp_echo",
+                        "agent_required_tool_input": "hello mcp",
+                    },
+                )
+            )
+
+            phases = _agent_events(infos)
+            self.assertIn("tool_finished", phases)
+            self.assertEqual(adapter.last_call["tool_name"], "echo")
+
+            entries = [
+                json.loads(line)
+                for line in audit_path.read_text(encoding="utf-8").splitlines()
+                if line.strip()
+            ]
+            mcp_entries = [entry for entry in entries if entry["tool"] == "mcp_echo"]
+            actions = {entry["action"] for entry in mcp_entries}
+            self.assertTrue({"approved", "executed"}.issubset(actions))
+            executed = next(entry for entry in mcp_entries if entry["action"] == "executed")
+            self.assertTrue(executed["ok"])
+            self.assertEqual(executed["risk_level"], "high")
 
 
 if __name__ == "__main__":

@@ -24,6 +24,60 @@ class ConfigTests(unittest.TestCase):
         self.assertEqual(config.agent_generation_timeout_seconds, 180)
         self.assertEqual(config.agent_stream_idle_timeout_seconds, 45)
 
+    def test_mcp_stdio_defaults_to_disabled_without_transport_config(self) -> None:
+        with patch.dict(os.environ, {}, clear=True):
+            config = load_config()
+
+        self.assertFalse(config.mcp_stdio_enabled)
+        self.assertEqual(config.mcp_stdio_command, "")
+        self.assertEqual(config.mcp_stdio_args, ())
+        self.assertEqual(config.mcp_stdio_env, {})
+        self.assertEqual(config.mcp_stdio_workdir, "")
+        self.assertEqual(config.mcp_stdio_timeout_seconds, 10.0)
+        self.assertEqual(config.mcp_tool_name_prefix, "mcp")
+
+    def test_mcp_stdio_enabled_requires_command(self) -> None:
+        with patch.dict(os.environ, {"SYNAPSE_MCP_STDIO_ENABLED": "true"}, clear=True):
+            with self.assertRaisesRegex(ValueError, "SYNAPSE_MCP_STDIO_COMMAND"):
+                load_config()
+
+    def test_mcp_stdio_parses_json_args_and_env(self) -> None:
+        with patch.dict(
+            os.environ,
+            {
+                "SYNAPSE_MCP_STDIO_ENABLED": "true",
+                "SYNAPSE_MCP_STDIO_COMMAND": "python",
+                "SYNAPSE_MCP_STDIO_ARGS_JSON": '["-m", "fake_server"]',
+                "SYNAPSE_MCP_STDIO_ENV_JSON": '{"FAKE_MODE": "normal", "COUNT": 3}',
+                "SYNAPSE_MCP_STDIO_WORKDIR": "/tmp/mcp",
+                "SYNAPSE_MCP_STDIO_TIMEOUT_SECONDS": "2.5",
+                "SYNAPSE_MCP_TOOL_NAME_PREFIX": "remote",
+            },
+            clear=True,
+        ):
+            config = load_config()
+
+        self.assertTrue(config.mcp_stdio_enabled)
+        self.assertEqual(config.mcp_stdio_command, "python")
+        self.assertEqual(config.mcp_stdio_args, ("-m", "fake_server"))
+        self.assertEqual(config.mcp_stdio_env, {"FAKE_MODE": "normal", "COUNT": "3"})
+        self.assertEqual(config.mcp_stdio_workdir, "/tmp/mcp")
+        self.assertEqual(config.mcp_stdio_timeout_seconds, 2.5)
+        self.assertEqual(config.mcp_tool_name_prefix, "remote")
+
+    def test_mcp_stdio_rejects_malformed_json_config(self) -> None:
+        with patch.dict(
+            os.environ,
+            {
+                "SYNAPSE_MCP_STDIO_ENABLED": "true",
+                "SYNAPSE_MCP_STDIO_COMMAND": "python",
+                "SYNAPSE_MCP_STDIO_ARGS_JSON": '{"bad": true}',
+            },
+            clear=True,
+        ):
+            with self.assertRaisesRegex(ValueError, "SYNAPSE_MCP_STDIO_ARGS_JSON"):
+                load_config()
+
 
 if __name__ == "__main__":
     unittest.main()

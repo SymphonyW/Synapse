@@ -217,6 +217,108 @@ class ToolProviderTests(unittest.TestCase):
         self.assertIsNotNone(result.error)
         self.assertEqual(result.error.code, "openapi_executor_missing")
 
+    def test_openapi_provider_merges_parameters_and_uses_server_base_url(self) -> None:
+        spec = {
+            "servers": [{"url": "https://api.example.com/v1"}],
+            "paths": {
+                "/tasks/{task_id}": {
+                    "parameters": [
+                        {
+                            "name": "task_id",
+                            "in": "path",
+                            "required": True,
+                            "schema": {"type": "string"},
+                        },
+                        {
+                            "name": "verbose",
+                            "in": "query",
+                            "required": True,
+                            "schema": {"type": "boolean"},
+                        },
+                    ],
+                    "get": {
+                        "operationId": "getTask",
+                        "parameters": [
+                            {
+                                "name": "verbose",
+                                "in": "query",
+                                "required": False,
+                                "schema": {"type": "string"},
+                            },
+                            {
+                                "name": "X-Trace-Id",
+                                "in": "header",
+                                "schema": {"type": "string"},
+                            },
+                        ],
+                    },
+                }
+            },
+        }
+        registry = ToolRegistry()
+        registry.register_provider(OpenAPIToolProvider(spec))
+
+        schema = registry.schemas()["openapi_get_task"]
+        self.assertEqual(schema["properties"]["verbose"]["type"], "string")
+        self.assertNotIn("verbose", schema.get("required", []))
+        self.assertIn("task_id", schema["required"])
+        self.assertEqual(schema["properties"]["X-Trace-Id"]["type"], "string")
+
+        tool = registry.get("openapi_get_task")
+        self.assertIsNotNone(tool)
+        self.assertEqual(tool.operation["base_url"], "https://api.example.com/v1")
+        parameters = {
+            (item["in"], item["name"]): item
+            for item in tool.operation["parameters"]
+        }
+        self.assertEqual(parameters[("query", "verbose")]["schema"]["type"], "string")
+        self.assertEqual(parameters[("path", "task_id")]["required"], True)
+
+    def test_openapi_provider_registers_and_executes_injected_executor(self) -> None:
+        captured: dict[str, Any] = {}
+
+        def executor(
+            operation: dict[str, Any],
+            call: ToolCall,
+            context: ToolContext,
+        ) -> ToolResult:
+            _ = context
+            captured["operation"] = operation
+            captured["arguments"] = dict(call.arguments)
+            return ToolResult.success(f"{operation['method']} {operation['path']}")
+
+        spec = {
+            "servers": [{"url": "https://api.example.com"}],
+            "paths": {
+                "/items/{item_id}": {
+                    "get": {
+                        "operationId": "getItem",
+                        "parameters": [
+                            {"name": "item_id", "in": "path", "required": True},
+                            {"name": "q", "in": "query"},
+                        ],
+                    }
+                }
+            },
+        }
+        registry = ToolRegistry()
+        registry.register_provider(OpenAPIToolProvider(spec, executor=executor))
+        tool = registry.get("openapi_get_item")
+        self.assertIsNotNone(tool)
+
+        result = tool.execute(
+            ToolCall(
+                tool_name="openapi_get_item",
+                arguments={"item_id": "item-1", "q": "alpha"},
+            ),
+            _context(),
+        )
+
+        self.assertTrue(result.ok)
+        self.assertEqual(result.output, "GET /items/{item_id}")
+        self.assertEqual(captured["operation"]["base_url"], "https://api.example.com")
+        self.assertEqual(captured["arguments"]["item_id"], "item-1")
+
     def test_mcp_provider_discovers_and_executes_adapter_tool(self) -> None:
         adapter = FakeMCPAdapter()
         registry = ToolRegistry()
@@ -309,6 +411,53 @@ class ToolProviderTests(unittest.TestCase):
         self.assertNotIn("tool_started", phases)
         approval = next(item for item in infos if item["agent_event"] == "approval_required")
         self.assertEqual(approval["payload"]["tool"], "mcp_echo")
+        self.assertEqual(approval["payload"]["risk_level"], "high")
+
+    def test_runtime_openapi_post_tool_requires_approval(self) -> None:
+        spec = {
+            "paths": {
+                "/items": {
+                    "post": {
+                        "operationId": "createItem",
+                        "requestBody": {
+                            "required": True,
+                            "content": {
+                                "application/json": {
+                                    "schema": {
+                                        "type": "object",
+                                        "properties": {"name": {"type": "string"}},
+                                    }
+                                }
+                            },
+                        },
+                    }
+                }
+            }
+        }
+        runtime = AgentRuntime(
+            model_provider="mock",
+            agent_tool_audit_log_file="",
+            agent_tool_providers=(OpenAPIToolProvider(spec),),
+        )
+
+        infos = asyncio.run(
+            _collect_runtime_infos(
+                runtime,
+                "create an item through openapi",
+                {
+                    "agent_enabled": "true",
+                    "auth_user_role": "admin",
+                    "agent_required_tool": "openapi_create_item",
+                    "agent_required_tool_input": '{"body":{"name":"created"}}',
+                },
+            )
+        )
+
+        phases = _agent_events(infos)
+        self.assertIn("approval_required", phases)
+        self.assertNotIn("tool_started", phases)
+        approval = next(item for item in infos if item["agent_event"] == "approval_required")
+        self.assertEqual(approval["payload"]["tool"], "openapi_create_item")
         self.assertEqual(approval["payload"]["risk_level"], "high")
 
     def test_runtime_mcp_tool_audit_uses_governance_chain(self) -> None:

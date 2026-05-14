@@ -78,6 +78,69 @@ class ConfigTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "SYNAPSE_MCP_STDIO_ARGS_JSON"):
                 load_config()
 
+    def test_openapi_defaults_to_disabled_without_spec_config(self) -> None:
+        with patch.dict(os.environ, {}, clear=True):
+            config = load_config()
+
+        self.assertFalse(config.openapi_enabled)
+        self.assertEqual(config.openapi_spec_file, "")
+        self.assertEqual(config.openapi_base_url_override, "")
+        self.assertEqual(config.openapi_static_headers, {})
+        self.assertEqual(config.openapi_bearer_token, "")
+        self.assertEqual(config.openapi_api_key_header, "")
+        self.assertEqual(config.openapi_api_key_value, "")
+        self.assertEqual(config.openapi_http_timeout_seconds, 12.0)
+        self.assertEqual(config.openapi_max_response_bytes, 65536)
+        self.assertEqual(config.openapi_allowed_schemes, ("http", "https"))
+
+    def test_openapi_enabled_requires_spec_file(self) -> None:
+        with patch.dict(os.environ, {"SYNAPSE_OPENAPI_ENABLED": "true"}, clear=True):
+            with self.assertRaisesRegex(ValueError, "SYNAPSE_OPENAPI_SPEC_FILE"):
+                load_config()
+
+    def test_openapi_parses_executor_config(self) -> None:
+        with patch.dict(
+            os.environ,
+            {
+                "SYNAPSE_OPENAPI_ENABLED": "true",
+                "SYNAPSE_OPENAPI_SPEC_FILE": "openapi.json",
+                "SYNAPSE_OPENAPI_BASE_URL_OVERRIDE": "https://api.example.com/v1",
+                "SYNAPSE_OPENAPI_STATIC_HEADERS_JSON": '{"X-Client": "synapse"}',
+                "SYNAPSE_OPENAPI_BEARER_TOKEN": "bearer-secret",
+                "SYNAPSE_OPENAPI_API_KEY_HEADER": "X-API-Key",
+                "SYNAPSE_OPENAPI_API_KEY_VALUE": "key-secret",
+                "SYNAPSE_OPENAPI_HTTP_TIMEOUT_SECONDS": "3.5",
+                "SYNAPSE_OPENAPI_MAX_RESPONSE_BYTES": "4096",
+                "SYNAPSE_OPENAPI_ALLOWED_SCHEMES": "https",
+            },
+            clear=True,
+        ):
+            config = load_config()
+
+        self.assertTrue(config.openapi_enabled)
+        self.assertEqual(config.openapi_spec_file, "openapi.json")
+        self.assertEqual(config.openapi_base_url_override, "https://api.example.com/v1")
+        self.assertEqual(config.openapi_static_headers, {"X-Client": "synapse"})
+        self.assertEqual(config.openapi_bearer_token, "bearer-secret")
+        self.assertEqual(config.openapi_api_key_header, "X-API-Key")
+        self.assertEqual(config.openapi_api_key_value, "key-secret")
+        self.assertEqual(config.openapi_http_timeout_seconds, 3.5)
+        self.assertEqual(config.openapi_max_response_bytes, 4096)
+        self.assertEqual(config.openapi_allowed_schemes, ("https",))
+
+    def test_openapi_rejects_malformed_static_headers(self) -> None:
+        with patch.dict(
+            os.environ,
+            {
+                "SYNAPSE_OPENAPI_ENABLED": "true",
+                "SYNAPSE_OPENAPI_SPEC_FILE": "openapi.json",
+                "SYNAPSE_OPENAPI_STATIC_HEADERS_JSON": "[1, 2]",
+            },
+            clear=True,
+        ):
+            with self.assertRaisesRegex(ValueError, "SYNAPSE_OPENAPI_STATIC_HEADERS_JSON"):
+                load_config()
+
 
 if __name__ == "__main__":
     unittest.main()

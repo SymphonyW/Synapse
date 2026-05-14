@@ -144,7 +144,6 @@ class OpenAPIToolProvider:
             if not isinstance(path, str) or not isinstance(path_item, dict):
                 continue
 
-            path_parameters = path_item.get("parameters", [])
             for method, operation in path_item.items():
                 normalized_method = str(method).strip().lower()
                 if normalized_method not in {"get", "post", "put", "patch", "delete"}:
@@ -157,17 +156,24 @@ class OpenAPIToolProvider:
                 tool_name = self._prefixed_name(raw_name)
                 risk_level = _operation_risk_level(normalized_method, operation)
                 requires_approval = _operation_requires_approval(risk_level, operation)
+                parameters = _operation_parameters(
+                    path_item.get("parameters", []),
+                    operation.get("parameters", []),
+                )
                 operation_record = {
                     "operation_id": operation_id,
                     "method": normalized_method.upper(),
                     "path": path,
+                    "base_url": _operation_base_url(self._spec, path_item, operation),
+                    "parameters": parameters,
+                    "request_body_required": _operation_request_body_required(operation),
                 }
 
                 discovered.append(
                     OpenAPITool(
                         name=tool_name,
                         description=_operation_description(normalized_method, path, operation),
-                        input_schema=_operation_input_schema(path_parameters, operation),
+                        input_schema=_operation_input_schema(parameters, operation),
                         operation=operation_record,
                         executor=self._executor,
                         risk_level=risk_level,
@@ -314,15 +320,13 @@ def _operation_description(method: str, path: str, operation: dict[str, Any]) ->
 
 
 def _operation_input_schema(
-    path_parameters: Any,
+    parameters: Iterable[dict[str, Any]],
     operation: dict[str, Any],
 ) -> dict[str, Any]:
     properties: dict[str, Any] = {}
     required: list[str] = []
 
-    for parameter in _iter_openapi_parameters(path_parameters):
-        _append_parameter_schema(parameter, properties, required)
-    for parameter in _iter_openapi_parameters(operation.get("parameters", [])):
+    for parameter in parameters:
         _append_parameter_schema(parameter, properties, required)
 
     request_body = operation.get("requestBody")
@@ -334,7 +338,7 @@ def _operation_input_schema(
             if isinstance(json_content, dict) and isinstance(json_content.get("schema"), dict):
                 body_schema = json_content["schema"]
         properties["body"] = body_schema
-        if bool(request_body.get("required", False)):
+        if _operation_request_body_required(operation):
             required.append("body")
 
     schema: dict[str, Any] = {
@@ -347,10 +351,69 @@ def _operation_input_schema(
     return schema
 
 
+def _operation_base_url(
+    spec: dict[str, Any],
+    path_item: dict[str, Any],
+    operation: dict[str, Any],
+) -> str:
+    for owner in (operation, path_item, spec):
+        servers = owner.get("servers")
+        if not isinstance(servers, list) or not servers:
+            continue
+        server = servers[0]
+        if not isinstance(server, dict):
+            continue
+        url = str(server.get("url", "")).strip()
+        if url:
+            return url
+    return ""
+
+
+def _operation_parameters(
+    path_parameters: Any,
+    operation_parameters: Any,
+) -> list[dict[str, Any]]:
+    merged: dict[tuple[str, str], dict[str, Any]] = {}
+    order: list[tuple[str, str]] = []
+    for parameter in (
+        *_iter_openapi_parameters(path_parameters),
+        *_iter_openapi_parameters(operation_parameters),
+    ):
+        normalized = _normalize_openapi_parameter(parameter)
+        if normalized is None:
+            continue
+        key = (normalized["in"], normalized["name"])
+        if key not in merged:
+            order.append(key)
+        # operation-level parameters are visited last and replace path-level defaults.
+        merged[key] = normalized
+    return [merged[key] for key in order]
+
+
 def _iter_openapi_parameters(raw_parameters: Any) -> Iterable[dict[str, Any]]:
     if not isinstance(raw_parameters, list):
         return ()
     return tuple(item for item in raw_parameters if isinstance(item, dict))
+
+
+def _normalize_openapi_parameter(parameter: dict[str, Any]) -> dict[str, Any] | None:
+    name = str(parameter.get("name", "")).strip()
+    location = str(parameter.get("in", "")).strip().lower()
+    if not name or location not in {"path", "query", "header"}:
+        return None
+
+    schema = parameter.get("schema")
+    if not isinstance(schema, dict) or not schema:
+        schema = {"type": "string"}
+    if parameter.get("description") and "description" not in schema:
+        schema = {**schema, "description": str(parameter["description"])}
+
+    return {
+        "name": name,
+        "in": location,
+        "required": bool(parameter.get("required", False) or location == "path"),
+        "schema": schema,
+    }
 
 
 def _append_parameter_schema(
@@ -371,6 +434,13 @@ def _append_parameter_schema(
     properties[name] = schema
     if bool(parameter.get("required", False)):
         required.append(name)
+
+
+def _operation_request_body_required(operation: dict[str, Any]) -> bool:
+    request_body = operation.get("requestBody")
+    if not isinstance(request_body, dict):
+        return False
+    return bool(request_body.get("required", False))
 
 
 def _operation_risk_level(method: str, operation: dict[str, Any]) -> RiskLevel:

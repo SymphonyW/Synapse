@@ -36,6 +36,16 @@ class Config:
     agent_enable_code_execution: bool
     agent_tool_policy_json: str
     agent_tool_audit_log_file: str
+    openapi_enabled: bool
+    openapi_spec_file: str
+    openapi_base_url_override: str
+    openapi_static_headers: dict[str, str]
+    openapi_bearer_token: str
+    openapi_api_key_header: str
+    openapi_api_key_value: str
+    openapi_http_timeout_seconds: float
+    openapi_max_response_bytes: int
+    openapi_allowed_schemes: tuple[str, ...]
     mcp_stdio_enabled: bool
     mcp_stdio_command: str
     mcp_stdio_args: tuple[str, ...]
@@ -122,6 +132,42 @@ def _read_json_env(value: str, env_name: str) -> dict[str, str]:
 
 
 def load_config() -> Config:
+    openapi_enabled = _read_bool(os.getenv("SYNAPSE_OPENAPI_ENABLED", "false"), False)
+    openapi_spec_file = os.getenv("SYNAPSE_OPENAPI_SPEC_FILE", "").strip()
+    openapi_base_url_override = ""
+    openapi_static_headers: dict[str, str] = {}
+    openapi_bearer_token = ""
+    openapi_api_key_header = ""
+    openapi_api_key_value = ""
+    openapi_http_timeout_seconds = 12.0
+    openapi_max_response_bytes = 65536
+    openapi_allowed_schemes = ("http", "https")
+
+    if openapi_enabled:
+        if not openapi_spec_file:
+            raise ValueError(
+                "SYNAPSE_OPENAPI_SPEC_FILE is required when SYNAPSE_OPENAPI_ENABLED=true"
+            )
+        openapi_base_url_override = os.getenv("SYNAPSE_OPENAPI_BASE_URL_OVERRIDE", "").strip()
+        openapi_static_headers = _read_json_env(
+            os.getenv("SYNAPSE_OPENAPI_STATIC_HEADERS_JSON", "{}"),
+            "SYNAPSE_OPENAPI_STATIC_HEADERS_JSON",
+        )
+        openapi_bearer_token = os.getenv("SYNAPSE_OPENAPI_BEARER_TOKEN", "").strip()
+        openapi_api_key_header = os.getenv("SYNAPSE_OPENAPI_API_KEY_HEADER", "").strip()
+        openapi_api_key_value = os.getenv("SYNAPSE_OPENAPI_API_KEY_VALUE", "").strip()
+        openapi_http_timeout_seconds = _read_float(
+            os.getenv("SYNAPSE_OPENAPI_HTTP_TIMEOUT_SECONDS", "12"),
+            12.0,
+        )
+        openapi_max_response_bytes = _read_int(
+            os.getenv("SYNAPSE_OPENAPI_MAX_RESPONSE_BYTES", "65536"),
+            65536,
+        )
+        openapi_allowed_schemes = _read_csv_tuple(
+            os.getenv("SYNAPSE_OPENAPI_ALLOWED_SCHEMES", "http,https")
+        )
+
     mcp_stdio_enabled = _read_bool(os.getenv("SYNAPSE_MCP_STDIO_ENABLED", "false"), False)
     mcp_stdio_command = os.getenv("SYNAPSE_MCP_STDIO_COMMAND", "").strip()
     mcp_stdio_args: tuple[str, ...] = ()
@@ -206,6 +252,16 @@ def load_config() -> Config:
             "SYNAPSE_AGENT_TOOL_AUDIT_LOG_FILE",
             "/tmp/synapse-agent-tool-audit.log",
         ),
+        openapi_enabled=openapi_enabled,
+        openapi_spec_file=openapi_spec_file,
+        openapi_base_url_override=openapi_base_url_override,
+        openapi_static_headers=openapi_static_headers,
+        openapi_bearer_token=openapi_bearer_token,
+        openapi_api_key_header=openapi_api_key_header,
+        openapi_api_key_value=openapi_api_key_value,
+        openapi_http_timeout_seconds=openapi_http_timeout_seconds,
+        openapi_max_response_bytes=openapi_max_response_bytes,
+        openapi_allowed_schemes=openapi_allowed_schemes,
         mcp_stdio_enabled=mcp_stdio_enabled,
         mcp_stdio_command=mcp_stdio_command,
         mcp_stdio_args=mcp_stdio_args,

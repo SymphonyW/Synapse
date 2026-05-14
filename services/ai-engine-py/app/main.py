@@ -1,19 +1,68 @@
 import asyncio
+import json
 import logging
+import pathlib
+from typing import Any
 
 import grpc
 
 from app.config import load_config
 from app.runtime import AgentRuntime
 from app.service import AgentRuntimeService
-from app.tools import MCPToolProvider, StdioMCPAdapter
+from app.tools import MCPToolProvider, OpenAPIHTTPExecutor, OpenAPIToolProvider, StdioMCPAdapter
 from synapse.v1 import agent_pb2_grpc
+
+
+def _load_openapi_spec_file(file_path: str) -> dict[str, Any]:
+    path = pathlib.Path(file_path).expanduser()
+    try:
+        raw = path.read_text(encoding="utf-8")
+    except OSError as exc:
+        raise ValueError(f"failed to read SYNAPSE_OPENAPI_SPEC_FILE {path}: {exc}") from exc
+
+    try:
+        if path.suffix.lower() in {".yaml", ".yml"}:
+            try:
+                import yaml  # type: ignore[import-not-found]
+            except ImportError as exc:
+                raise ValueError(
+                    "YAML OpenAPI specs require PyYAML; use JSON or install PyYAML"
+                ) from exc
+            decoded = yaml.safe_load(raw)
+        else:
+            decoded = json.loads(raw)
+    except ValueError:
+        raise
+    except Exception as exc:
+        raise ValueError(f"failed to parse OpenAPI spec file {path}: {exc}") from exc
+
+    if not isinstance(decoded, dict):
+        raise ValueError(f"OpenAPI spec file {path} must contain a JSON object")
+    return decoded
 
 
 async def serve() -> None:
     # 从环境变量加载 Runtime 与模型提供方配置。
     config = load_config()
     agent_tool_providers = []
+    if config.openapi_enabled:
+        openapi_executor = OpenAPIHTTPExecutor(
+            base_url_override=config.openapi_base_url_override,
+            allowlist=config.agent_tool_http_allowlist,
+            timeout_seconds=config.openapi_http_timeout_seconds,
+            max_response_bytes=config.openapi_max_response_bytes,
+            allowed_schemes=config.openapi_allowed_schemes,
+            static_headers=config.openapi_static_headers,
+            bearer_token=config.openapi_bearer_token,
+            api_key_header=config.openapi_api_key_header,
+            api_key_value=config.openapi_api_key_value,
+        )
+        agent_tool_providers.append(
+            OpenAPIToolProvider(
+                _load_openapi_spec_file(config.openapi_spec_file),
+                executor=openapi_executor,
+            )
+        )
     if config.mcp_stdio_enabled:
         agent_tool_providers.append(
             MCPToolProvider(

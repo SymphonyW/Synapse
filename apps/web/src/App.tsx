@@ -4,6 +4,7 @@ import ReactMarkdown from 'react-markdown'
 import remarkBreaks from 'remark-breaks'
 import remarkGfm from 'remark-gfm'
 import { MemoryPanel } from './features/memory/MemoryPanel'
+import { TraceWorkbench } from './features/trace/TraceWorkbench'
 import './App.css'
 
 // 控制台展示与筛选使用的任务生命周期状态。
@@ -416,68 +417,6 @@ function statusClass(status?: string): string {
   }
 }
 
-function formatEventMessage(message?: string): string {
-  const normalized = (message ?? '').trim()
-  if (normalized === '') {
-    return ''
-  }
-
-  try {
-    const parsed = JSON.parse(normalized) as AgentInfoEnvelope
-
-    if (typeof parsed.agent_event !== 'string') {
-      return normalized
-    }
-
-    // 标准化 Agent info 事件可以提供 display_message，前端不必解释每个
-    // payload 字段也能保持可读；旧事件没有该字段时继续回退到原有 JSON 展示。
-    if (typeof parsed.display_message === 'string' && parsed.display_message.trim() !== '') {
-      return parsed.display_message.trim()
-    }
-
-    const readableToolMessage = formatAgentToolEvent(parsed.agent_event, parsed.payload)
-    if (readableToolMessage !== '') {
-      return readableToolMessage
-    }
-
-    const payloadText = parsed.payload ? JSON.stringify(parsed.payload) : ''
-    if (payloadText === '') {
-      return `agent.${parsed.agent_event}`
-    }
-
-    return `agent.${parsed.agent_event}: ${payloadText}`
-  } catch {
-    return normalized
-  }
-}
-
-// requestJson 统一封装 fetch 与错误解析，保证界面错误提示风格一致。
-function formatAgentToolEvent(
-  agentEvent: string,
-  payload?: Record<string, unknown>,
-): string {
-  const tool = typeof payload?.tool === 'string' ? payload.tool : ''
-  const reason = typeof payload?.reason === 'string' ? payload.reason : ''
-  const suffix = tool !== '' ? `: ${tool}` : ''
-
-  switch (agentEvent) {
-    case 'tool_selected':
-      return `Tool selected${suffix}`
-    case 'tool_started':
-      return `Tool started${suffix}`
-    case 'tool_finished':
-      return `Tool finished${suffix}`
-    case 'tool_failed':
-      return reason !== '' ? `Tool failed${suffix} (${reason})` : `Tool failed${suffix}`
-    case 'approval_required':
-      return `Approval required${suffix}`
-    case 'tool_skipped':
-      return reason !== '' ? `Tool skipped${suffix} (${reason})` : `Tool skipped${suffix}`
-    default:
-      return ''
-  }
-}
-
 async function requestJson<T>(url: string, init?: RequestInit): Promise<T> {
   const response = await fetch(url, {
     ...init,
@@ -849,41 +788,6 @@ function App() {
         return tr('已关闭', 'closed')
       default:
         return state
-    }
-  }
-
-  const eventTypeLabel = (eventType?: string): string => {
-    switch (eventType) {
-      case 'info':
-        return tr('信息', 'info')
-      case 'started':
-        return tr('开始', 'started')
-      case 'token':
-        return tr('Token', 'token')
-      case 'paused':
-        return tr('已暂停', 'paused')
-      case 'approval_granted':
-        return tr('审批通过', 'approval granted')
-      case 'resume_requested':
-        return tr('恢复请求', 'resume requested')
-      case 'cancel_requested':
-        return tr('收到取消请求', 'cancel requested')
-      case 'canceled':
-        return tr('已取消', 'canceled')
-      case 'completed':
-        return tr('已完成', 'completed')
-      case 'failed':
-        return tr('失败', 'failed')
-      case 'dead_lettered':
-        return tr('进入死信', 'dead-lettered')
-      case 'replay_requested':
-        return tr('已请求重放', 'replay requested')
-      case 'terminal':
-        return tr('终态', 'terminal')
-      case 'unspecified':
-        return tr('未指定', 'unspecified')
-      default:
-        return eventType ?? tr('未知', 'unknown')
     }
   }
 
@@ -3069,7 +2973,7 @@ function App() {
 
         <section className="panel panel-stream">
           <div className="panel-head">
-            <h2>{tr('实时事件流', 'Live Event Stream')}</h2>
+            <h2>{tr('Agent Trace 工作台', 'Agent Trace Workbench')}</h2>
             <span className={`stream-${streamState}`}>
               {streamStateLabel(streamState)} · #{lastEventID}
             </span>
@@ -3125,45 +3029,24 @@ function App() {
             <p className="empty">{tr('选择一个任务以查看事件流。', 'Select a task to stream events.')}</p>
           )}
 
-          <ul className="event-list">
-            {selectedTaskEvents.map((event, index) => {
-              const agentEnvelope = parseAgentInfoEnvelope(event.message)
-              const agentPayload = agentEnvelope?.payload
-              const sourceLinks = collectSourceLinks(agentPayload)
-              const rawTool = readRecordString(agentPayload, 'tool') || readRecordString(agentPayload, 'tool_name')
-              const stepIndex = readRecordNumber(agentPayload, 'step_index')
-
-              return (
-                <li key={`${event.event_id ?? 'meta'}-${index}`} className="event-item">
-                  <span className="event-time">{formatDateTime(event.emitted_at_unix_ms)}</span>
-                  <span className="event-type">{eventTypeLabel(event.type)}</span>
-                  <div className="event-content">
-                    {event.token && <code>{event.token}</code>}
-                    {!event.token && (event.message || event.status) && (
-                      <p>{formatEventMessage(event.message) || event.status}</p>
-                    )}
-                    {agentEnvelope?.agent_event && (
-                      <div className="event-agent-meta">
-                        <span>{agentTimelineLabel(agentEnvelope.agent_event)}</span>
-                        {typeof stepIndex === 'number' && <span>step {stepIndex}</span>}
-                        {rawTool && <span>{rawTool}</span>}
-                      </div>
-                    )}
-                    {sourceLinks.length > 0 && (
-                      <div className="event-source-links">
-                        {sourceLinks.map((link) => (
-                          <a href={link.url} key={link.url} rel="noreferrer noopener" target="_blank">
-                            {link.label}
-                          </a>
-                        ))}
-                      </div>
-                    )}
-                  </div>
-                </li>
-              )
-            })}
-            {selectedTaskEvents.length === 0 && <li className="empty">{tr('暂无事件。', 'No events yet.')}</li>}
-          </ul>
+          {selectedTask ? (
+            <TraceWorkbench
+              events={selectedTaskEvents}
+              language={language}
+              task={{
+                id: selectedTask.id,
+                conversationId: selectedTask.metadata?.[CLIENT_CONVERSATION_ID_KEY],
+                status: selectedTask.status,
+                prompt: selectedTask.prompt,
+                userId: selectedTask.user_id,
+                createdAt: selectedTask.created_at,
+                updatedAt: selectedTask.updated_at,
+                error: selectedTask.error,
+              }}
+            />
+          ) : (
+            <p className="empty">{tr('暂无事件。', 'No events yet.')}</p>
+          )}
         </section>
 
         <section className="panel panel-dead">

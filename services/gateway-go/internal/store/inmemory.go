@@ -19,6 +19,7 @@ type InMemoryStore struct {
 	tasks       map[string]domain.Task
 	events      map[string][]domain.TaskEvent
 	deadLetters map[string]domain.DeadLetterTask
+	toolPolicy  *domain.ToolPolicy
 	users       map[string]domain.AuthUser
 	sessions    map[string]domain.AuthSession
 	nextEventID int64
@@ -330,6 +331,25 @@ func (s *InMemoryStore) ListDeadLetters(limit int) ([]domain.DeadLetterTask, err
 	return entries, nil
 }
 
+func (s *InMemoryStore) GetToolPolicy() (domain.ToolPolicy, bool, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	if s.toolPolicy == nil {
+		return domain.ToolPolicy{}, false, nil
+	}
+	return cloneToolPolicy(*s.toolPolicy), true, nil
+}
+
+func (s *InMemoryStore) UpsertToolPolicy(policy domain.ToolPolicy) (domain.ToolPolicy, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	cloned := cloneToolPolicy(policy)
+	s.toolPolicy = &cloned
+	return cloneToolPolicy(cloned), nil
+}
+
 // UpsertSystemUser 创建或更新系统账号（通常用于管理员种子用户）。
 func (s *InMemoryStore) UpsertSystemUser(username string, passwordHash string, role domain.UserRole) error {
 	s.mu.Lock()
@@ -519,6 +539,19 @@ func cloneTask(task domain.Task) domain.Task {
 	}
 
 	return copyTask
+}
+
+func cloneToolPolicy(policy domain.ToolPolicy) domain.ToolPolicy {
+	copyPolicy := policy
+	if policy.RoleAllow != nil {
+		copyPolicy.RoleAllow = make(map[string][]string, len(policy.RoleAllow))
+		for role, tools := range policy.RoleAllow {
+			copyPolicy.RoleAllow[role] = append([]string{}, tools...)
+		}
+	}
+	copyPolicy.ApprovalRequired = append([]string{}, policy.ApprovalRequired...)
+	copyPolicy.DisabledTools = append([]string{}, policy.DisabledTools...)
+	return copyPolicy
 }
 
 // cloneEvent 目前事件是值类型，直接返回即可；保留该函数便于未来扩展。

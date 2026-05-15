@@ -44,6 +44,18 @@ func (noopAgentClient) MemoryList(context.Context, *agentv1.MemoryListRequest) (
 	return &agentv1.MemoryListResponse{}, nil
 }
 
+func (noopAgentClient) GetToolPolicy(context.Context) (*agentv1.GetToolPolicyResponse, error) {
+	return &agentv1.GetToolPolicyResponse{}, nil
+}
+
+func (noopAgentClient) ApplyToolPolicy(context.Context, *agentv1.ApplyToolPolicyRequest) (*agentv1.ApplyToolPolicyResponse, error) {
+	return &agentv1.ApplyToolPolicyResponse{}, nil
+}
+
+func (noopAgentClient) ListTools(context.Context) (*agentv1.ListToolsResponse, error) {
+	return &agentv1.ListToolsResponse{}, nil
+}
+
 func (noopAgentClient) Close() error {
 	return nil
 }

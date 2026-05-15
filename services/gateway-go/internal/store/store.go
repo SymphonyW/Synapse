@@ -39,6 +39,8 @@ type TaskStore interface {
 	ClearDeadLetter(taskID string) error
 	// ListDeadLetters 列出死信任务。
 	ListDeadLetters(limit int) ([]domain.DeadLetterTask, error)
+	GetToolPolicy() (domain.ToolPolicy, bool, error)
+	UpsertToolPolicy(policy domain.ToolPolicy) (domain.ToolPolicy, error)
 
 	// UpsertSystemUser 创建或更新系统账号（用于管理员种子用户）。
 	UpsertSystemUser(username string, passwordHash string, role domain.UserRole) error

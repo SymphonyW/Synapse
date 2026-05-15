@@ -30,6 +30,10 @@ Gateway API 模块位于 [services/gateway-go/internal/api](../services/gateway-
 | POST | `/v1/tasks/{taskID}/replay` | `ReplayTask` | owner/admin |
 | DELETE | `/v1/conversations/{conversationID}` | `DeleteConversation` | 当前用户会话 |
 | GET | `/v1/dead-letters` | `ListDeadLetters` | admin |
+| GET | `/v1/admin/tool-policy` | `GetToolPolicy` | admin |
+| PUT | `/v1/admin/tool-policy` | `PutToolPolicy` | admin |
+| POST | `/v1/admin/tool-policy/reload` | `ReloadToolPolicy` | admin |
+| GET | `/v1/admin/tools` | `ListAdminTools` | admin |
 | GET | `/v1/memories` | `ListMemories` | 登录，admin 可带 user_id |
 | POST | `/v1/memories` | `WriteMemory` | 登录，admin 可写指定 user_id |
 | GET | `/v1/memories/recall` | `RecallMemory` | 登录，admin 可带 user_id |

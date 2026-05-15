@@ -50,6 +50,18 @@ func (f *fakeAgentClient) MemoryList(context.Context, *agentv1.MemoryListRequest
 	return &agentv1.MemoryListResponse{}, nil
 }
 
+func (f *fakeAgentClient) GetToolPolicy(context.Context) (*agentv1.GetToolPolicyResponse, error) {
+	return &agentv1.GetToolPolicyResponse{}, nil
+}
+
+func (f *fakeAgentClient) ApplyToolPolicy(context.Context, *agentv1.ApplyToolPolicyRequest) (*agentv1.ApplyToolPolicyResponse, error) {
+	return &agentv1.ApplyToolPolicyResponse{}, nil
+}
+
+func (f *fakeAgentClient) ListTools(context.Context) (*agentv1.ListToolsResponse, error) {
+	return &agentv1.ListToolsResponse{}, nil
+}
+
 func (f *fakeAgentClient) Close() error {
 	return nil
 }

@@ -7,6 +7,10 @@ class ToolPolicy:
     role_allow: dict[str, set[str]]
     approval_required: set[str]
     disabled_tools: set[str]
+    version: int = 0
+    updated_at_unix_ms: int = 0
+    updated_by: str = ""
+    description: str = ""
 
     @classmethod
     def from_json(
@@ -16,14 +20,6 @@ class ToolPolicy:
         default_approval_required: set[str],
         default_disabled_tools: set[str] | None = None,
     ) -> "ToolPolicy":
-        role_allow = {
-            role: set(tools)
-            for role, tools in default_role_allow.items()
-        }
-        approval_required = set(default_approval_required)
-        # provider 可以声明默认禁用项；部署侧 JSON 仍然可以覆盖或补充。
-        disabled_tools: set[str] = set(default_disabled_tools or set())
-
         payload = {}
         raw = raw_json.strip()
         if raw:
@@ -33,6 +29,28 @@ class ToolPolicy:
                     payload = decoded
             except json.JSONDecodeError:
                 payload = {}
+
+        return cls.from_mapping(
+            payload=payload,
+            default_role_allow=default_role_allow,
+            default_approval_required=default_approval_required,
+            default_disabled_tools=default_disabled_tools,
+        )
+
+    @classmethod
+    def from_mapping(
+        cls,
+        payload: dict,
+        default_role_allow: dict[str, set[str]],
+        default_approval_required: set[str],
+        default_disabled_tools: set[str] | None = None,
+    ) -> "ToolPolicy":
+        role_allow = {
+            role: set(tools)
+            for role, tools in default_role_allow.items()
+        }
+        approval_required = set(default_approval_required)
+        disabled_tools: set[str] = set(default_disabled_tools or set())
 
         roles_payload = payload.get("role_allow")
         if isinstance(roles_payload, dict):
@@ -75,6 +93,10 @@ class ToolPolicy:
             role_allow=role_allow,
             approval_required=approval_required,
             disabled_tools=disabled_tools,
+            version=_read_non_negative_int(payload.get("version")),
+            updated_at_unix_ms=_read_non_negative_int(payload.get("updated_at_unix_ms")),
+            updated_by=_read_optional_string(payload.get("updated_by")),
+            description=_read_optional_string(payload.get("description")),
         )
 
     def is_tool_allowed(self, role: str, tool_name: str) -> bool:
@@ -100,3 +122,11 @@ class ToolPolicy:
         if normalized_tool in self.disabled_tools:
             return False
         return normalized_tool in self.approval_required
+
+
+def _read_non_negative_int(value: object) -> int:
+    return value if isinstance(value, int) and value >= 0 else 0
+
+
+def _read_optional_string(value: object) -> str:
+    return value.strip() if isinstance(value, str) else ""

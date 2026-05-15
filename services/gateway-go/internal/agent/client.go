@@ -24,6 +24,9 @@ type Client interface {
 	MemoryDelete(ctx context.Context, request *agentv1.MemoryDeleteRequest) (*agentv1.MemoryDeleteResponse, error)
 	// MemoryList 列出指定用户最近的长期记忆。
 	MemoryList(ctx context.Context, request *agentv1.MemoryListRequest) (*agentv1.MemoryListResponse, error)
+	GetToolPolicy(ctx context.Context) (*agentv1.GetToolPolicyResponse, error)
+	ApplyToolPolicy(ctx context.Context, request *agentv1.ApplyToolPolicyRequest) (*agentv1.ApplyToolPolicyResponse, error)
+	ListTools(ctx context.Context) (*agentv1.ListToolsResponse, error)
 	// Close 释放底层连接资源。
 	Close() error
 }
@@ -85,6 +88,18 @@ func (c *GRPCClient) MemoryDelete(ctx context.Context, request *agentv1.MemoryDe
 // MemoryList 透传长期记忆列表请求。
 func (c *GRPCClient) MemoryList(ctx context.Context, request *agentv1.MemoryListRequest) (*agentv1.MemoryListResponse, error) {
 	return c.client.MemoryList(ctx, request)
+}
+
+func (c *GRPCClient) GetToolPolicy(ctx context.Context) (*agentv1.GetToolPolicyResponse, error) {
+	return c.client.GetToolPolicy(ctx, &agentv1.GetToolPolicyRequest{})
+}
+
+func (c *GRPCClient) ApplyToolPolicy(ctx context.Context, request *agentv1.ApplyToolPolicyRequest) (*agentv1.ApplyToolPolicyResponse, error) {
+	return c.client.ApplyToolPolicy(ctx, request)
+}
+
+func (c *GRPCClient) ListTools(ctx context.Context) (*agentv1.ListToolsResponse, error) {
+	return c.client.ListTools(ctx, &agentv1.ListToolsRequest{})
 }
 
 // Close 关闭 gRPC 连接。

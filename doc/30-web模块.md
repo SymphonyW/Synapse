@@ -46,6 +46,7 @@ Vite 代理：
 |---|---|
 | `client` | 普通用户聊天入口，按会话组织任务 |
 | `ops` | 管理员运维台，管理任务、审批、取消、死信和 Agent Trace 工作台 |
+| `policy` | 管理员工具策略页，管理禁用、审批和角色白名单 |
 
 localStorage：
 
@@ -68,6 +69,7 @@ localStorage：
 | 审批恢复 | paused 任务可 approve 并恢复执行 |
 | 取消 | 支持单任务取消和批量取消 |
 | 死信 | 管理员查看死信并重放 |
+| 工具策略中心 | 查看工具目录，按 provider / risk / disabled 过滤，编辑禁用、审批与角色白名单 |
 | 记忆 | 通过事件展示 memory_recall/memory_write，当前没有完整记忆管理页面 |
 
 ## 数据刷新
@@ -124,13 +126,28 @@ localStorage：
 | `POST /v1/tasks/{taskID}/replay` | 任务重放 |
 | `DELETE /v1/conversations/{conversationID}` | 删除会话 |
 | `GET /v1/dead-letters` | 死信列表 |
+| `GET /v1/admin/tool-policy` | 当前工具策略 |
+| `PUT /v1/admin/tool-policy` | 保存并热应用工具策略 |
+| `POST /v1/admin/tool-policy/reload` | 重新下发已保存策略 |
+| `GET /v1/admin/tools` | 当前工具目录与有效治理状态 |
 
 ## 权限行为
 
 1. 非管理员不能进入运维视图。
-2. 普通用户只能看到自己的任务。
-3. 管理员可查看全局任务和死信。
-4. 后端是权限最终裁决方，前端只做体验层控制。
+2. 非管理员不能进入工具策略页。
+3. 普通用户只能看到自己的任务。
+4. 管理员可查看全局任务、死信和工具策略。
+5. 后端是权限最终裁决方，前端只做体验层控制。
+
+## 工具策略页
+
+`features/tool-policy` 提供独立管理面：
+
+1. `approval_required=false` 只表示不额外要求审批，不表示绕过角色授权；
+2. `disabled_tools` 与 `approval_required` 使用不同视觉状态，避免管理员把“需审批”误认成“不可用”；
+3. `role_allow` 里的 `*` 表示角色默认允许当前和未来工具，但仍受禁用与审批规则约束；
+4. 对高风险工具做醒目标识；
+5. 保存成功后会立即重新拉取策略和工具目录，以展示真实生效结果。
 
 ## 当前限制
 

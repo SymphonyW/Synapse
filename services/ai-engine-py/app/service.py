@@ -63,6 +63,31 @@ class AgentRuntimeService(agent_pb2_grpc.AgentRuntimeServicer):
             items=[_memory_record_to_proto(item) for item in items]
         )
 
+    async def GetToolPolicy(
+        self, request: agent_pb2.GetToolPolicyRequest, context
+    ) -> agent_pb2.GetToolPolicyResponse:
+        _ = request
+        return agent_pb2.GetToolPolicyResponse(
+            policy=_tool_policy_to_proto(self._runtime.current_tool_policy())
+        )
+
+    async def ApplyToolPolicy(
+        self, request: agent_pb2.ApplyToolPolicyRequest, context
+    ) -> agent_pb2.ApplyToolPolicyResponse:
+        policy = self._runtime.apply_tool_policy(_tool_policy_payload_from_proto(request.policy))
+        return agent_pb2.ApplyToolPolicyResponse(
+            policy=_tool_policy_to_proto(policy),
+            applied=True,
+        )
+
+    async def ListTools(
+        self, request: agent_pb2.ListToolsRequest, context
+    ) -> agent_pb2.ListToolsResponse:
+        _ = request
+        return agent_pb2.ListToolsResponse(
+            items=[_tool_descriptor_to_proto(item) for item in self._runtime.list_tools()]
+        )
+
     async def SubmitTask(
         self, request: agent_pb2.SubmitTaskRequest, context
     ) -> AsyncIterator[agent_pb2.AgentEvent]:
@@ -152,4 +177,49 @@ def _memory_hit_to_proto(hit: dict) -> agent_pb2.MemoryRecallHit:
         record=_memory_record_to_proto(hit),
         score=float(hit.get("score", 0.0) or 0.0),
         matched_terms=[str(item) for item in hit.get("matched_terms", [])],
+    )
+
+
+def _tool_policy_payload_from_proto(policy: agent_pb2.ToolPolicy | None) -> dict:
+    if policy is None:
+        return {}
+
+    return {
+        "role_allow": {
+            str(role): [str(item) for item in values.items]
+            for role, values in policy.role_allow.items()
+        },
+        "approval_required": [str(item) for item in policy.approval_required],
+        "disabled_tools": [str(item) for item in policy.disabled_tools],
+        "version": int(policy.version),
+        "updated_at_unix_ms": int(policy.updated_at_unix_ms),
+        "updated_by": policy.updated_by,
+        "description": policy.description,
+    }
+
+
+def _tool_policy_to_proto(policy) -> agent_pb2.ToolPolicy:
+    return agent_pb2.ToolPolicy(
+        role_allow={
+            role: agent_pb2.StringList(items=sorted(tools))
+            for role, tools in sorted(policy.role_allow.items())
+        },
+        approval_required=sorted(policy.approval_required),
+        disabled_tools=sorted(policy.disabled_tools),
+        version=policy.version,
+        updated_at_unix_ms=policy.updated_at_unix_ms,
+        updated_by=policy.updated_by,
+        description=policy.description,
+    )
+
+
+def _tool_descriptor_to_proto(item: dict[str, object]) -> agent_pb2.ToolDescriptor:
+    return agent_pb2.ToolDescriptor(
+        name=str(item.get("name", "")),
+        description=str(item.get("description", "")),
+        risk_level=str(item.get("risk_level", "")),
+        requires_approval=bool(item.get("requires_approval", False)),
+        provider_name=str(item.get("provider_name", "")),
+        currently_disabled=bool(item.get("currently_disabled", False)),
+        allowed_roles=[str(role) for role in item.get("allowed_roles", [])],
     )

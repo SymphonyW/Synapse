@@ -14,6 +14,7 @@ import (
 	"github.com/synapse/synapse/services/gateway-go/internal/api"
 	"github.com/synapse/synapse/services/gateway-go/internal/config"
 	"github.com/synapse/synapse/services/gateway-go/internal/domain"
+	agentv1 "github.com/synapse/synapse/services/gateway-go/internal/gen/synapse/v1"
 	"github.com/synapse/synapse/services/gateway-go/internal/queue"
 	"github.com/synapse/synapse/services/gateway-go/internal/store"
 	"github.com/synapse/synapse/services/gateway-go/internal/worker"
@@ -66,6 +67,21 @@ func main() {
 		log.Fatalf("failed to upsert admin account: %v", err)
 	}
 	log.Printf("auth admin user is ready")
+
+	if policy, found, err := taskStore.GetToolPolicy(); err != nil {
+		log.Printf("failed to load persisted tool policy: %v", err)
+	} else if found {
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		_, applyErr := agentClient.ApplyToolPolicy(ctx, &agentv1.ApplyToolPolicyRequest{
+			Policy: agent.ToolPolicyToProto(policy),
+		})
+		cancel()
+		if applyErr != nil {
+			log.Printf("failed to apply persisted tool policy on startup: %v", applyErr)
+		} else {
+			log.Printf("persisted tool policy applied version=%d", policy.Version)
+		}
+	}
 
 	// 队列同样采用“内存默认、Redis 优先”的可用性策略。
 	taskQueue := queue.TaskQueue(queue.NewInMemoryQueue(1024))

@@ -295,6 +295,12 @@ class AgentRuntime:
             default_approval_required=default_approval_required,
             default_disabled_tools=self._tool_registry.default_disabled_tools(),
         )
+        self._tool_policy_lock = threading.RLock()
+        self._tool_policy_defaults = {
+            "role_allow": default_role_allow,
+            "approval_required": default_approval_required,
+            "disabled_tools": self._tool_registry.default_disabled_tools(),
+        }
         self._tool_audit = ToolAuditLogger(agent_tool_audit_log_file)
 
         if self.model_provider == "openai":
@@ -318,6 +324,44 @@ class AgentRuntime:
 
         async for token in self._run_mock(prompt):
             yield token
+
+    def current_tool_policy(self) -> ToolPolicy:
+        with self._tool_policy_lock:
+            return self._tool_policy
+
+    def apply_tool_policy(self, payload: dict[str, Any]) -> ToolPolicy:
+        policy = ToolPolicy.from_mapping(
+            payload=payload,
+            default_role_allow=self._tool_policy_defaults["role_allow"],
+            default_approval_required=self._tool_policy_defaults["approval_required"],
+            default_disabled_tools=self._tool_policy_defaults["disabled_tools"],
+        )
+        with self._tool_policy_lock:
+            self._tool_policy = policy
+            return self._tool_policy
+
+    def list_tools(self) -> tuple[dict[str, object], ...]:
+        policy = self.current_tool_policy()
+        descriptors: list[dict[str, object]] = []
+        for descriptor in self._tool_registry.describe():
+            name = str(descriptor["name"])
+            allowed_roles = sorted(
+                role
+                for role in policy.role_allow.keys()
+                if policy.is_tool_allowed(role, name)
+            )
+            descriptors.append(
+                {
+                    "name": name,
+                    "description": descriptor["description"],
+                    "risk_level": descriptor["risk_level"],
+                    "requires_approval": policy.requires_approval(name),
+                    "provider_name": descriptor["provider"],
+                    "currently_disabled": name in policy.disabled_tools,
+                    "allowed_roles": allowed_roles,
+                }
+            )
+        return tuple(descriptors)
 
     async def run_task(
         self,
@@ -1575,10 +1619,10 @@ class AgentRuntime:
         return ""
 
     def _is_tool_allowed_for_role(self, tool_name: str, role: str) -> bool:
-        return self._tool_policy.is_tool_allowed(role, tool_name)
+        return self.current_tool_policy().is_tool_allowed(role, tool_name)
 
     def _tool_requires_approval(self, tool_name: str) -> bool:
-        return self._tool_policy.requires_approval(tool_name)
+        return self.current_tool_policy().requires_approval(tool_name)
 
     def _tool_risk_level(self, tool_name: str) -> str:
         tool = self._tool_registry.get(tool_name)

@@ -517,6 +517,117 @@ func (s *PostgresStore) ListDeadLetters(limit int) ([]domain.DeadLetterTask, err
 	return entries, nil
 }
 
+func (s *PostgresStore) GetToolPolicy() (domain.ToolPolicy, bool, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), dbOperationTimeout)
+	defer cancel()
+
+	row := s.db.QueryRowContext(
+		ctx,
+		`SELECT role_allow, approval_required, disabled_tools, version, updated_at, updated_by, description
+		 FROM tool_policies
+		 WHERE id = 'default'`,
+	)
+
+	var policy domain.ToolPolicy
+	var roleAllowRaw []byte
+	var approvalRaw []byte
+	var disabledRaw []byte
+	err := row.Scan(
+		&roleAllowRaw,
+		&approvalRaw,
+		&disabledRaw,
+		&policy.Version,
+		&policy.UpdatedAt,
+		&policy.UpdatedBy,
+		&policy.Description,
+	)
+	if errors.Is(err, sql.ErrNoRows) {
+		return domain.ToolPolicy{}, false, nil
+	}
+	if err != nil {
+		return domain.ToolPolicy{}, false, err
+	}
+	if err := json.Unmarshal(roleAllowRaw, &policy.RoleAllow); err != nil {
+		return domain.ToolPolicy{}, false, err
+	}
+	if err := json.Unmarshal(approvalRaw, &policy.ApprovalRequired); err != nil {
+		return domain.ToolPolicy{}, false, err
+	}
+	if err := json.Unmarshal(disabledRaw, &policy.DisabledTools); err != nil {
+		return domain.ToolPolicy{}, false, err
+	}
+	return policy, true, nil
+}
+
+func (s *PostgresStore) UpsertToolPolicy(policy domain.ToolPolicy) (domain.ToolPolicy, error) {
+	roleAllowJSON, err := json.Marshal(policy.RoleAllow)
+	if err != nil {
+		return domain.ToolPolicy{}, err
+	}
+	approvalJSON, err := json.Marshal(policy.ApprovalRequired)
+	if err != nil {
+		return domain.ToolPolicy{}, err
+	}
+	disabledJSON, err := json.Marshal(policy.DisabledTools)
+	if err != nil {
+		return domain.ToolPolicy{}, err
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), dbOperationTimeout)
+	defer cancel()
+
+	row := s.db.QueryRowContext(
+		ctx,
+		`INSERT INTO tool_policies (
+		   id, role_allow, approval_required, disabled_tools, version, updated_at, updated_by, description
+		 )
+		 VALUES ('default', $1, $2, $3, $4, $5, $6, $7)
+		 ON CONFLICT (id)
+		 DO UPDATE SET
+		   role_allow = EXCLUDED.role_allow,
+		   approval_required = EXCLUDED.approval_required,
+		   disabled_tools = EXCLUDED.disabled_tools,
+		   version = EXCLUDED.version,
+		   updated_at = EXCLUDED.updated_at,
+		   updated_by = EXCLUDED.updated_by,
+		   description = EXCLUDED.description
+		 RETURNING role_allow, approval_required, disabled_tools, version, updated_at, updated_by, description`,
+		roleAllowJSON,
+		approvalJSON,
+		disabledJSON,
+		policy.Version,
+		policy.UpdatedAt,
+		policy.UpdatedBy,
+		policy.Description,
+	)
+
+	var saved domain.ToolPolicy
+	var roleAllowRaw []byte
+	var approvalRaw []byte
+	var disabledRaw []byte
+	if err := row.Scan(
+		&roleAllowRaw,
+		&approvalRaw,
+		&disabledRaw,
+		&saved.Version,
+		&saved.UpdatedAt,
+		&saved.UpdatedBy,
+		&saved.Description,
+	); err != nil {
+		return domain.ToolPolicy{}, err
+	}
+	if err := json.Unmarshal(roleAllowRaw, &saved.RoleAllow); err != nil {
+		return domain.ToolPolicy{}, err
+	}
+	if err := json.Unmarshal(approvalRaw, &saved.ApprovalRequired); err != nil {
+		return domain.ToolPolicy{}, err
+	}
+	if err := json.Unmarshal(disabledRaw, &saved.DisabledTools); err != nil {
+		return domain.ToolPolicy{}, err
+	}
+	return saved, nil
+}
+
 // UpsertSystemUser 创建或更新系统用户（通常用于管理员种子账号）。
 func (s *PostgresStore) UpsertSystemUser(username string, passwordHash string, role domain.UserRole) error {
 	normalized := normalizeAuthUsername(username)
@@ -766,6 +877,17 @@ func (s *PostgresStore) ensureSchema(ctx context.Context) error {
 		 role TEXT NOT NULL,
 		 expires_at TIMESTAMPTZ NOT NULL,
 		 created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+		);
+
+		CREATE TABLE IF NOT EXISTS tool_policies (
+		 id TEXT PRIMARY KEY,
+		 role_allow JSONB NOT NULL DEFAULT '{}'::jsonb,
+		 approval_required JSONB NOT NULL DEFAULT '[]'::jsonb,
+		 disabled_tools JSONB NOT NULL DEFAULT '[]'::jsonb,
+		 version BIGINT NOT NULL DEFAULT 0,
+		 updated_at TIMESTAMPTZ NOT NULL,
+		 updated_by TEXT NOT NULL DEFAULT '',
+		 description TEXT NOT NULL DEFAULT ''
 		);
 
 		CREATE INDEX IF NOT EXISTS idx_task_events_task_id_id ON task_events (task_id, id);

@@ -4,13 +4,14 @@ import ReactMarkdown from 'react-markdown'
 import remarkBreaks from 'remark-breaks'
 import remarkGfm from 'remark-gfm'
 import { MemoryPanel } from './features/memory/MemoryPanel'
+import { ToolPolicyPanel } from './features/tool-policy/ToolPolicyPanel'
 import { TraceWorkbench } from './features/trace/TraceWorkbench'
 import './App.css'
 
 // 控制台展示与筛选使用的任务生命周期状态。
 type TaskStatus = 'queued' | 'running' | 'paused' | 'completed' | 'failed' | 'canceled'
 type Language = 'zh' | 'en'
-type ViewMode = 'client' | 'memory' | 'ops'
+type ViewMode = 'client' | 'memory' | 'ops' | 'policy'
 type UserRole = 'admin' | 'user'
 type AuthMode = 'login' | 'register'
 
@@ -461,7 +462,9 @@ function App() {
     }
 
     const persisted = window.localStorage.getItem(VIEW_MODE_STORAGE_KEY)
-    return persisted === 'ops' || persisted === 'memory' ? persisted : 'client'
+    return persisted === 'ops' || persisted === 'memory' || persisted === 'policy'
+      ? persisted
+      : 'client'
   })
 
   const [currentUser, setCurrentUser] = useState<SessionIdentity | null>(() =>
@@ -1127,7 +1130,7 @@ function App() {
       setUserID(currentUser.username)
     }
 
-    if (!isAdmin && viewMode === 'ops') {
+    if (!isAdmin && (viewMode === 'ops' || viewMode === 'policy')) {
       setViewMode('client')
     }
   }, [currentUser, isAdmin, userID, viewMode])
@@ -2317,6 +2320,11 @@ function App() {
                 {tr('进入运维台', 'Open Ops Console')}
               </button>
             )}
+            {isAdmin && (
+              <button className="mode-switch ghost" onClick={() => setViewMode('policy')} type="button">
+                {tr('工具策略', 'Tool Policy')}
+              </button>
+            )}
             <button
               className="language-switch"
               onClick={() => setLanguage((previous) => (previous === 'zh' ? 'en' : 'zh'))}
@@ -2362,9 +2370,14 @@ function App() {
               {tr('记忆', 'Memory')}
             </button>
             {isAdmin ? (
-              <button className="mode-switch ghost" onClick={() => setViewMode('ops')} type="button">
-                {tr('进入运维台', 'Open Ops Console')}
-              </button>
+              <>
+                <button className="mode-switch ghost" onClick={() => setViewMode('ops')} type="button">
+                  {tr('进入运维台', 'Open Ops Console')}
+                </button>
+                <button className="mode-switch ghost" onClick={() => setViewMode('policy')} type="button">
+                  {tr('工具策略', 'Tool Policy')}
+                </button>
+              </>
             ) : (
               <button
                 className="mode-switch ghost ops-locked"
@@ -2613,6 +2626,48 @@ function App() {
     )
   }
 
+  if (viewMode === 'policy') {
+    return (
+      <div className="app-shell app-shell-policy">
+        <header className="topbar">
+          <div>
+            <p className="eyebrow">{tr('Synapse 管理中心', 'Synapse Admin')}</p>
+            <h1>{tr('工具策略管理中心', 'Tool Policy Center')}</h1>
+          </div>
+          <div className="topbar-actions">
+            <div className="account-pill">
+              <div>
+                <strong>{currentUser.username}</strong>
+                <span>{tr('管理员', 'admin')}</span>
+              </div>
+              <button className="ghost small" onClick={handleLogout} type="button">
+                {tr('退出', 'Sign Out')}
+              </button>
+            </div>
+            <button className="mode-switch ghost" onClick={() => setViewMode('client')} type="button">
+              {tr('进入用户端', 'Open Client')}
+            </button>
+            <button className="mode-switch ghost" onClick={() => setViewMode('memory')} type="button">
+              {tr('记忆', 'Memory')}
+            </button>
+            <button className="mode-switch ghost" onClick={() => setViewMode('ops')} type="button">
+              {tr('进入运维台', 'Open Ops Console')}
+            </button>
+            <button
+              className="language-switch"
+              onClick={() => setLanguage((previous) => (previous === 'zh' ? 'en' : 'zh'))}
+              type="button"
+            >
+              {language === 'zh' ? 'EN' : '中文'}
+            </button>
+          </div>
+        </header>
+
+        <ToolPolicyPanel language={language} />
+      </div>
+    )
+  }
+
   if (!isAdmin) {
     return (
       <div className="app-shell">
@@ -2664,6 +2719,9 @@ function App() {
           </button>
           <button className="mode-switch ghost" onClick={() => setViewMode('memory')} type="button">
             {tr('记忆', 'Memory')}
+          </button>
+          <button className="mode-switch ghost" onClick={() => setViewMode('policy')} type="button">
+            {tr('工具策略', 'Tool Policy')}
           </button>
           <button
             className="language-switch"

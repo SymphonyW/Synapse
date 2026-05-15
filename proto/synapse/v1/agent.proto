@@ -98,6 +98,51 @@ message MemoryListResponse {
   repeated MemoryRecord items = 1;
 }
 
+message StringList {
+  repeated string items = 1;
+}
+
+message ToolPolicy {
+  map<string, StringList> role_allow = 1;
+  repeated string approval_required = 2;
+  repeated string disabled_tools = 3;
+  int64 version = 4;
+  int64 updated_at_unix_ms = 5;
+  string updated_by = 6;
+  string description = 7;
+}
+
+message GetToolPolicyRequest {}
+
+message GetToolPolicyResponse {
+  ToolPolicy policy = 1;
+}
+
+message ApplyToolPolicyRequest {
+  ToolPolicy policy = 1;
+}
+
+message ApplyToolPolicyResponse {
+  ToolPolicy policy = 1;
+  bool applied = 2;
+}
+
+message ListToolsRequest {}
+
+message ToolDescriptor {
+  string name = 1;
+  string description = 2;
+  string risk_level = 3;
+  bool requires_approval = 4;
+  string provider_name = 5;
+  bool currently_disabled = 6;
+  repeated string allowed_roles = 7;
+}
+
+message ListToolsResponse {
+  repeated ToolDescriptor items = 1;
+}
+
 // 运行时服务：提供健康检查、任务流式执行与长期记忆管理。
 service AgentRuntime {
   rpc Health(HealthRequest) returns (HealthResponse);
@@ -106,4 +151,7 @@ service AgentRuntime {
   rpc MemoryRecall(MemoryRecallRequest) returns (MemoryRecallResponse);
   rpc MemoryDelete(MemoryDeleteRequest) returns (MemoryDeleteResponse);
   rpc MemoryList(MemoryListRequest) returns (MemoryListResponse);
+  rpc GetToolPolicy(GetToolPolicyRequest) returns (GetToolPolicyResponse);
+  rpc ApplyToolPolicy(ApplyToolPolicyRequest) returns (ApplyToolPolicyResponse);
+  rpc ListTools(ListToolsRequest) returns (ListToolsResponse);
 }

@@ -698,6 +698,234 @@ h2 {
   gap: 16px;
 }
 
+.app-shell-policy {
+  gap: 16px;
+}
+
+.tool-policy-layout {
+  display: grid;
+  grid-template-columns: minmax(320px, 420px) minmax(0, 1fr);
+  gap: 16px;
+  min-height: calc(100dvh - 164px);
+}
+
+.tool-policy-summary,
+.tool-policy-catalog {
+  display: grid;
+  align-content: start;
+  gap: 14px;
+}
+
+.tool-policy-heading,
+.tool-policy-toolbar {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.tool-policy-heading p,
+.tool-policy-toolbar p,
+.tool-policy-role-grid p {
+  margin: 4px 0 0;
+  color: #557693;
+  font-size: 0.82rem;
+  line-height: 1.45;
+}
+
+.tool-policy-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.tool-policy-actions button:not(.ghost) {
+  background: linear-gradient(135deg, #f97316, #fb923c);
+  color: #fff;
+}
+
+.tool-policy-meta {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.tool-policy-meta div {
+  min-width: 0;
+  border: 1px solid #d6e5f2;
+  border-radius: 12px;
+  background: linear-gradient(180deg, #ffffff, #f6fbff);
+  padding: 8px;
+  display: grid;
+  gap: 4px;
+}
+
+.tool-policy-meta span {
+  color: #5a7894;
+  font-size: 0.72rem;
+  text-transform: uppercase;
+}
+
+.tool-policy-meta strong {
+  min-width: 0;
+  color: #173f5f;
+  font-family: 'IBM Plex Mono', monospace;
+  overflow-wrap: anywhere;
+}
+
+.tool-policy-role-grid {
+  display: grid;
+  gap: 10px;
+}
+
+.tool-policy-role-grid section {
+  border: 1px solid #d7e5f3;
+  border-radius: 14px;
+  background: #fbfdff;
+  padding: 10px;
+  display: grid;
+  gap: 4px;
+}
+
+.tool-policy-role-grid section > div {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.tool-policy-role-grid strong {
+  color: #173f5f;
+}
+
+.tool-policy-role-grid label,
+.tool-policy-switches label,
+.tool-policy-role-switches label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: #315b7c;
+  font-size: 0.8rem;
+}
+
+.tool-policy-description {
+  display: grid;
+  gap: 6px;
+  color: #2f5575;
+  font-size: 0.84rem;
+  font-weight: 600;
+}
+
+.tool-policy-description textarea {
+  resize: vertical;
+}
+
+.tool-policy-filters {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.tool-policy-filters label {
+  display: grid;
+  gap: 6px;
+  color: #2f5575;
+  font-size: 0.84rem;
+  font-weight: 600;
+}
+
+.tool-policy-table {
+  display: grid;
+  gap: 10px;
+}
+
+.tool-policy-row {
+  border: 1px solid #d8e7f4;
+  border-radius: 14px;
+  background: linear-gradient(180deg, #ffffff, #f8fbff);
+  padding: 11px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  gap: 14px;
+  align-items: center;
+}
+
+.tool-policy-row.high,
+.tool-policy-row.critical {
+  border-color: #f2d7ab;
+  background:
+    radial-gradient(circle at 100% 0%, rgba(249, 115, 22, 0.12), transparent 42%),
+    linear-gradient(180deg, #fffdf9, #fff8ef);
+}
+
+.tool-policy-main {
+  min-width: 0;
+  display: grid;
+  gap: 5px;
+}
+
+.tool-policy-title {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.tool-policy-title strong {
+  color: #173f5f;
+}
+
+.tool-policy-title span,
+.tool-policy-title em {
+  border-radius: 999px;
+  font-size: 0.72rem;
+  padding: 3px 8px;
+  font-style: normal;
+}
+
+.tool-policy-title span {
+  border: 1px solid #c8dff2;
+  background: #edf6ff;
+  color: #20537c;
+}
+
+.tool-policy-title em {
+  border: 1px solid #f2d7ab;
+  background: #fff7ed;
+  color: #9a3412;
+}
+
+.tool-policy-row.low .tool-policy-title em,
+.tool-policy-row.medium .tool-policy-title em {
+  border-color: #c8dff2;
+  background: #f3f9ff;
+  color: #315b7c;
+}
+
+.tool-policy-main p {
+  margin: 0;
+  color: #244965;
+  line-height: 1.45;
+}
+
+.tool-policy-main small {
+  color: #6a849e;
+}
+
+.tool-policy-switches,
+.tool-policy-role-switches {
+  display: grid;
+  gap: 7px;
+}
+
+.tool-policy-switches .state-disabled {
+  color: #9b1c1c;
+}
+
+.tool-policy-switches .state-approval {
+  color: #8a4f08;
+}
+
 .memory-layout {
   display: grid;
   grid-template-columns: minmax(320px, 420px) minmax(0, 1fr);
@@ -2631,6 +2859,28 @@ button:not(:disabled):hover {
       'controls'
       'list'
       'recall';
+  }
+
+  .tool-policy-layout {
+    min-height: auto;
+    grid-template-columns: 1fr;
+  }
+
+  .tool-policy-heading,
+  .tool-policy-toolbar,
+  .tool-policy-role-grid section > div {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .tool-policy-actions {
+    align-items: stretch;
+  }
+
+  .tool-policy-meta,
+  .tool-policy-filters,
+  .tool-policy-row {
+    grid-template-columns: 1fr;
   }
 
   .memory-list-panel,

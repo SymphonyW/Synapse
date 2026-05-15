@@ -70,7 +70,7 @@ localStorage：
 | 取消 | 支持单任务取消和批量取消 |
 | 死信 | 管理员查看死信并重放 |
 | 工具策略中心 | 查看工具目录，按 provider / risk / disabled 过滤，编辑禁用、审批与角色白名单 |
-| 记忆 | 通过事件展示 memory_recall/memory_write，当前没有完整记忆管理页面 |
+| 记忆 | 提供长期记忆管理页，支持列表、召回测试、手工写入和删除 |
 
 ## 数据刷新
 
@@ -156,5 +156,5 @@ localStorage：
 | `App.tsx` 较大 | 继续拆分 auth/chat/ops hooks；Trace 工作台已先独立到 `features/trace` |
 | 没有前端测试 | 增加关键交互 E2E 和组件测试 |
 | 未容器化 | 增加 Web Dockerfile 或静态托管说明 |
-| 没有完整记忆管理页面 | 可增加记忆列表、召回、删除 UI |
+| 记忆页展示的是后端返回的原始 score | `file` 与 `vector` 后端 score 语义不同，UI 暂不额外解释 |
 | 状态管理复杂 | 可引入 React Query 等数据层 |

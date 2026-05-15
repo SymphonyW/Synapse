@@ -68,7 +68,7 @@ flowchart TD
     Worker -->|gRPC SubmitTask stream| AI[AI Engine Runtime]
     Handler -->|gRPC Memory RPC| AI
     AI --> Model[Mock or OpenAI-compatible Provider]
-    AI --> Memory[(File Memory Store)]
+    AI --> Memory[(File or Vector Memory Store)]
     AI --> Audit[(Tool Audit Log)]
     Store --> Postgres[(PostgreSQL)]
     Queue --> Redis[(Redis List)]
@@ -83,7 +83,7 @@ flowchart TD
 5. AI Engine 输出 `started/info/token/completed/failed` 事件。
 6. Gateway 持久化事件，并通过 `/v1/tasks/{taskID}/events` SSE 增量输出。
 7. 如果 AI Engine 输出 `approval_required`，Worker 将任务切到 `paused`，等待 `/approve` 恢复。
-8. 长期记忆通过 AI Engine 文件后端保存，Gateway 的 `/v1/memories` API 只是转发 gRPC Memory RPC。
+8. 长期记忆默认仍由 AI Engine 文件后端保存，也可通过配置切换到向量后端；Gateway 的 `/v1/memories` API 继续转发同一套 gRPC Memory RPC。
 
 架构优点：
 
@@ -177,9 +177,17 @@ AI Engine 环境变量：
 | `SYNAPSE_AGENT_GENERATION_TIMEOUT_SECONDS` | `30` | Agent 最终回复首 token 等待超时 |
 | `SYNAPSE_AGENT_STREAM_IDLE_TIMEOUT_SECONDS` | `15` | 模型流式输出空闲超时 |
 | `SYNAPSE_AGENT_REQUIRE_APPROVAL_FOR_HIGH_RISK` | `true` | 高风险工具默认需要审批 |
+| `SYNAPSE_MEMORY_BACKEND` | `file` | 长期记忆后端：`file` 或 `vector` |
 | `SYNAPSE_AGENT_MEMORY_FILE` | `/tmp/synapse-agent-memory.json` | 文件型长期记忆路径 |
 | `SYNAPSE_AGENT_MEMORY_MAX_ENTRIES_PER_USER` | `80` | 每用户最大记忆条数 |
 | `SYNAPSE_AGENT_MEMORY_RECALL_LIMIT` | `3` | 每次召回条数 |
+| `SYNAPSE_VECTOR_DATABASE_URL` | 空 | `vector` 后端使用的 PostgreSQL 连接串 |
+| `SYNAPSE_VECTOR_EMBEDDING_PROVIDER` | 空 | embedding provider，当前支持 `openai_compatible` |
+| `SYNAPSE_VECTOR_EMBEDDING_MODEL` | 空 | embedding 模型名 |
+| `SYNAPSE_VECTOR_EMBEDDING_BASE_URL` | 空 | OpenAI-compatible embeddings base URL |
+| `SYNAPSE_VECTOR_EMBEDDING_API_KEY` | 空 | embeddings API key |
+| `SYNAPSE_VECTOR_EMBEDDING_DIMENSION` | `0` | 向量维度；启用 `vector` 时必须显式配置 |
+| `SYNAPSE_VECTOR_MEMORY_TOP_K` | `10` | pgvector 初筛候选数 |
 | `SYNAPSE_AGENT_TOOL_HTTP_ALLOWLIST` | 空 | HTTP/浏览工具允许访问的域名列表，逗号分隔 |
 | `SYNAPSE_AGENT_TOOL_HTTP_TIMEOUT_SECONDS` | `12` | HTTP/浏览工具超时 |
 | `SYNAPSE_AGENT_ENABLE_CODE_EXECUTION` | `false` | 是否启用 code_exec |
@@ -283,6 +291,7 @@ Provider 模板：
 | [docker-compose.openai.env.example](docker-compose.openai.env.example) | OpenAI |
 | [docker-compose.gemini.env.example](docker-compose.gemini.env.example) | Gemini OpenAI-compatible |
 | [docker-compose.zhipu.env.example](docker-compose.zhipu.env.example) | 智谱 OpenAI-compatible |
+| [docker-compose.vector.env.example](docker-compose.vector.env.example) | 向量长期记忆 |
 | [docker-compose.mirror.env.example](docker-compose.mirror.env.example) | Docker 镜像源覆盖 |
 
 ## 数据库初始化
@@ -293,6 +302,8 @@ Provider 模板：
 2. 创建表：`tasks`、`task_events`、`dead_letter_tasks`、`auth_users`、`auth_sessions`、`tool_policies`。
 3. 创建索引：任务事件索引、会话任务索引、会话用户与过期时间索引。
 4. Gateway 启动后自动 upsert 管理员账号。
+
+AI Engine 的 `vector` 记忆后端当前也采用轻量 schema ensure：启动时会执行 `CREATE EXTENSION IF NOT EXISTS vector`，并自动确保 `vector_memories` 表与索引存在。它是第一版工程化落点，后续应与 Gateway 一起迁移到版本化 migration。
 
 Docker Compose 默认数据库连接：
 
@@ -308,6 +319,14 @@ $env:SYNAPSE_REDIS_ADDR = "127.0.0.1:6379"
 ```
 
 生产建议：将自动建表迁移为版本化 migration，并在发布流程中显式执行。
+
+如果要启用语义长期记忆，可复制 [docker-compose.vector.env.example](docker-compose.vector.env.example) 为 `docker-compose.vector.env`，填入 embedding 凭据后执行：
+
+```powershell
+docker compose --env-file docker-compose.vector.env up --build -d
+```
+
+默认 Compose 仍使用 `file` backend；Postgres 镜像已切到自带 pgvector 扩展的版本，因此 mock 模式与 vector 模式都能直接拉起。
 
 ## 快速启动
 
@@ -678,7 +697,7 @@ docker compose up --build -d
 | 事件持久化 | 支持断线续传、终态判断和运维审计 |
 | 存储/队列回退 | 本地开发不依赖完整基础设施 |
 | 精确工具审批 | `approved_tool_call` 匹配工具名、输入、风险和恢复步点 |
-| FileMemoryStore | 轻量实现长期记忆读写和召回，便于后续替换向量后端 |
+| 双记忆后端 | 默认保留 `FileMemoryStore` 的轻量行为，按配置切换到 `PostgresVectorMemoryStore` 获得语义召回 |
 | ToolProvider 抽象 | 为本地 Python 工具、OpenAPI 工具和 MCP adapter 预留统一扩展入口 |
 | Agent regression | 用稳定 mock case 做工具、审批、记忆和失败恢复门禁 |
 

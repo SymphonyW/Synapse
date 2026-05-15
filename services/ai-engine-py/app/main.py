@@ -7,9 +7,12 @@ from typing import Any
 import grpc
 
 from app.config import load_config
+from app.embeddings.openai_compatible import OpenAICompatibleEmbeddingProvider
+from app.memory import FileMemoryStore, MemoryStore
 from app.runtime import AgentRuntime
 from app.service import AgentRuntimeService
 from app.tools import MCPToolProvider, OpenAPIHTTPExecutor, OpenAPIToolProvider, StdioMCPAdapter
+from app.vector_memory import PostgresVectorMemoryStore
 from synapse.v1 import agent_pb2_grpc
 
 
@@ -39,6 +42,30 @@ def _load_openapi_spec_file(file_path: str) -> dict[str, Any]:
     if not isinstance(decoded, dict):
         raise ValueError(f"OpenAPI spec file {path} must contain a JSON object")
     return decoded
+
+
+def _build_memory_store(config) -> MemoryStore:
+    if config.memory_backend == "file":
+        return FileMemoryStore(
+            file_path=config.agent_memory_file,
+            max_entries_per_user=config.agent_memory_max_entries_per_user,
+        )
+
+    if config.memory_backend == "vector":
+        provider = OpenAICompatibleEmbeddingProvider(
+            model=config.vector_embedding_model,
+            base_url=config.vector_embedding_base_url,
+            api_key=config.vector_embedding_api_key,
+        )
+        return PostgresVectorMemoryStore(
+            database_url=config.vector_database_url,
+            embedding_provider=provider,
+            embedding_dimension=config.vector_embedding_dimension,
+            top_k=config.vector_memory_top_k,
+            max_entries_per_user=config.agent_memory_max_entries_per_user,
+        )
+
+    raise ValueError(f"unsupported memory backend: {config.memory_backend}")
 
 
 async def serve() -> None:
@@ -99,6 +126,7 @@ async def serve() -> None:
         agent_memory_file=config.agent_memory_file,
         agent_memory_max_entries_per_user=config.agent_memory_max_entries_per_user,
         agent_memory_recall_limit=config.agent_memory_recall_limit,
+        agent_memory_store=_build_memory_store(config),
         agent_tool_http_allowlist=config.agent_tool_http_allowlist,
         agent_tool_http_timeout_seconds=config.agent_tool_http_timeout_seconds,
         agent_enable_code_execution=config.agent_enable_code_execution,

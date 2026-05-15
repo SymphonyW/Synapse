@@ -85,7 +85,7 @@ class FileMemoryStore:
         if self._path is None:
             return None
 
-        normalized = self._normalize_record(record)
+        normalized = _normalize_memory_record(record)
         if normalized is None:
             return None
 
@@ -289,29 +289,11 @@ class FileMemoryStore:
             created_at=created_at,
         )
 
-    def _normalize_record(self, record: MemoryRecord) -> MemoryRecord | None:
-        user_id = _normalize_user_id(record.user_id)
-        content = " ".join(record.content.strip().split())
-        summary = " ".join(record.summary.strip().split())
-        if not user_id or (not content and not summary):
-            return None
-
-        return MemoryRecord(
-            memory_id=record.memory_id.strip() or f"mem_{uuid.uuid4().hex}",
-            user_id=user_id,
-            content=content[:4000],
-            summary=summary[:1000],
-            source_task_id=record.source_task_id.strip()[:160],
-            importance=_clamp_importance(record.importance),
-            created_at=record.created_at if record.created_at > 0 else int(time.time() * 1000),
-        )
-
-
 class VectorMemoryStore:
-    """未来向量后端的接口骨架。
+    """为旧导入保留的兼容占位类。
 
-    这里故意不接具体向量库，先固定 runtime/API 所依赖的方法签名。后续实现时只需要在
-    `memory_write` 内写入向量，在 `memory_recall` 内返回按相似度排序的 MemoryRecallHit。
+    真实的 pgvector 实现已位于 `app.vector_memory.PostgresVectorMemoryStore`；
+    Runtime 现在依赖 `MemoryStore` protocol，而不是这个占位类。
     """
 
     def memory_write(self, record: MemoryRecord) -> MemoryRecord | None:
@@ -329,6 +311,24 @@ class VectorMemoryStore:
 
 def _normalize_user_id(value: str) -> str:
     return value.strip().lower()
+
+
+def _normalize_memory_record(record: MemoryRecord) -> MemoryRecord | None:
+    user_id = _normalize_user_id(record.user_id)
+    content = " ".join(record.content.strip().split())
+    summary = " ".join(record.summary.strip().split())
+    if not user_id or (not content and not summary):
+        return None
+
+    return MemoryRecord(
+        memory_id=record.memory_id.strip() or f"mem_{uuid.uuid4().hex}",
+        user_id=user_id,
+        content=content[:4000],
+        summary=summary[:1000],
+        source_task_id=record.source_task_id.strip()[:160],
+        importance=_clamp_importance(record.importance),
+        created_at=record.created_at if record.created_at > 0 else int(time.time() * 1000),
+    )
 
 
 def _tokenize(text: str) -> set[str]:

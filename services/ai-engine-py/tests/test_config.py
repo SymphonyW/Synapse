@@ -6,6 +6,50 @@ from app.config import load_config
 
 
 class ConfigTests(unittest.TestCase):
+    def test_vector_memory_defaults_to_file_backend(self) -> None:
+        with patch.dict(os.environ, {}, clear=True):
+            config = load_config()
+
+        self.assertEqual(config.memory_backend, "file")
+        self.assertEqual(config.vector_database_url, "")
+        self.assertEqual(config.vector_embedding_provider, "")
+        self.assertEqual(config.vector_embedding_model, "")
+        self.assertEqual(config.vector_embedding_base_url, "")
+        self.assertEqual(config.vector_embedding_api_key, "")
+        self.assertEqual(config.vector_embedding_dimension, 0)
+        self.assertEqual(config.vector_memory_top_k, 10)
+
+    def test_vector_memory_backend_requires_complete_configuration(self) -> None:
+        with patch.dict(os.environ, {"SYNAPSE_MEMORY_BACKEND": "vector"}, clear=True):
+            with self.assertRaisesRegex(ValueError, "SYNAPSE_VECTOR_DATABASE_URL"):
+                load_config()
+
+    def test_vector_memory_backend_loads_pgvector_settings(self) -> None:
+        with patch.dict(
+            os.environ,
+            {
+                "SYNAPSE_MEMORY_BACKEND": "vector",
+                "SYNAPSE_VECTOR_DATABASE_URL": "postgresql://synapse:synapse@postgres:5432/synapse",
+                "SYNAPSE_VECTOR_EMBEDDING_PROVIDER": "openai_compatible",
+                "SYNAPSE_VECTOR_EMBEDDING_MODEL": "text-embedding-3-small",
+                "SYNAPSE_VECTOR_EMBEDDING_BASE_URL": "https://api.openai.com/v1",
+                "SYNAPSE_VECTOR_EMBEDDING_API_KEY": "secret",
+                "SYNAPSE_VECTOR_EMBEDDING_DIMENSION": "1536",
+                "SYNAPSE_VECTOR_MEMORY_TOP_K": "24",
+            },
+            clear=True,
+        ):
+            config = load_config()
+
+        self.assertEqual(config.memory_backend, "vector")
+        self.assertEqual(config.vector_database_url, "postgresql://synapse:synapse@postgres:5432/synapse")
+        self.assertEqual(config.vector_embedding_provider, "openai_compatible")
+        self.assertEqual(config.vector_embedding_model, "text-embedding-3-small")
+        self.assertEqual(config.vector_embedding_base_url, "https://api.openai.com/v1")
+        self.assertEqual(config.vector_embedding_api_key, "secret")
+        self.assertEqual(config.vector_embedding_dimension, 1536)
+        self.assertEqual(config.vector_memory_top_k, 24)
+
     def test_loads_openai_continuation_and_agent_timeout_settings(self) -> None:
         with patch.dict(
             os.environ,

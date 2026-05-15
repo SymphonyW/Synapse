@@ -28,9 +28,17 @@ class Config:
     agent_generation_timeout_seconds: float
     agent_stream_idle_timeout_seconds: float
     agent_require_approval_for_high_risk: bool
+    memory_backend: str
     agent_memory_file: str
     agent_memory_max_entries_per_user: int
     agent_memory_recall_limit: int
+    vector_database_url: str
+    vector_embedding_provider: str
+    vector_embedding_model: str
+    vector_embedding_base_url: str
+    vector_embedding_api_key: str
+    vector_embedding_dimension: int
+    vector_memory_top_k: int
     agent_tool_http_allowlist: tuple[str, ...]
     agent_tool_http_timeout_seconds: float
     agent_enable_code_execution: bool
@@ -132,6 +140,51 @@ def _read_json_env(value: str, env_name: str) -> dict[str, str]:
 
 
 def load_config() -> Config:
+    memory_backend = os.getenv("SYNAPSE_MEMORY_BACKEND", "file").strip().lower() or "file"
+    if memory_backend not in {"file", "vector"}:
+        raise ValueError("SYNAPSE_MEMORY_BACKEND must be one of: file, vector")
+
+    vector_database_url = os.getenv("SYNAPSE_VECTOR_DATABASE_URL", "").strip()
+    vector_embedding_provider = os.getenv("SYNAPSE_VECTOR_EMBEDDING_PROVIDER", "").strip().lower()
+    vector_embedding_model = os.getenv("SYNAPSE_VECTOR_EMBEDDING_MODEL", "").strip()
+    vector_embedding_base_url = os.getenv("SYNAPSE_VECTOR_EMBEDDING_BASE_URL", "").strip()
+    vector_embedding_api_key = os.getenv("SYNAPSE_VECTOR_EMBEDDING_API_KEY", "").strip()
+    vector_embedding_dimension = _read_int(
+        os.getenv("SYNAPSE_VECTOR_EMBEDDING_DIMENSION", "0"),
+        0,
+    )
+    vector_memory_top_k = _read_int(os.getenv("SYNAPSE_VECTOR_MEMORY_TOP_K", "10"), 10)
+
+    if memory_backend == "vector":
+        if not vector_database_url:
+            raise ValueError(
+                "SYNAPSE_VECTOR_DATABASE_URL is required when SYNAPSE_MEMORY_BACKEND=vector"
+            )
+        if not vector_embedding_provider:
+            raise ValueError(
+                "SYNAPSE_VECTOR_EMBEDDING_PROVIDER is required when SYNAPSE_MEMORY_BACKEND=vector"
+            )
+        if vector_embedding_provider != "openai_compatible":
+            raise ValueError(
+                "SYNAPSE_VECTOR_EMBEDDING_PROVIDER currently supports only openai_compatible"
+            )
+        if not vector_embedding_model:
+            raise ValueError(
+                "SYNAPSE_VECTOR_EMBEDDING_MODEL is required when SYNAPSE_MEMORY_BACKEND=vector"
+            )
+        if not vector_embedding_api_key:
+            raise ValueError(
+                "SYNAPSE_VECTOR_EMBEDDING_API_KEY is required when SYNAPSE_MEMORY_BACKEND=vector"
+            )
+        if vector_embedding_dimension <= 0:
+            raise ValueError(
+                "SYNAPSE_VECTOR_EMBEDDING_DIMENSION must be > 0 when SYNAPSE_MEMORY_BACKEND=vector"
+            )
+        if vector_memory_top_k <= 0:
+            raise ValueError(
+                "SYNAPSE_VECTOR_MEMORY_TOP_K must be > 0 when SYNAPSE_MEMORY_BACKEND=vector"
+            )
+
     openapi_enabled = _read_bool(os.getenv("SYNAPSE_OPENAPI_ENABLED", "false"), False)
     openapi_spec_file = os.getenv("SYNAPSE_OPENAPI_SPEC_FILE", "").strip()
     openapi_base_url_override = ""
@@ -231,6 +284,7 @@ def load_config() -> Config:
         agent_require_approval_for_high_risk=_read_bool(
             os.getenv("SYNAPSE_AGENT_REQUIRE_APPROVAL_FOR_HIGH_RISK", "true"), True
         ),
+        memory_backend=memory_backend,
         agent_memory_file=os.getenv("SYNAPSE_AGENT_MEMORY_FILE", "/tmp/synapse-agent-memory.json"),
         agent_memory_max_entries_per_user=_read_int(
             os.getenv("SYNAPSE_AGENT_MEMORY_MAX_ENTRIES_PER_USER", "80"), 80
@@ -238,6 +292,13 @@ def load_config() -> Config:
         agent_memory_recall_limit=_read_int(
             os.getenv("SYNAPSE_AGENT_MEMORY_RECALL_LIMIT", "3"), 3
         ),
+        vector_database_url=vector_database_url,
+        vector_embedding_provider=vector_embedding_provider,
+        vector_embedding_model=vector_embedding_model,
+        vector_embedding_base_url=vector_embedding_base_url,
+        vector_embedding_api_key=vector_embedding_api_key,
+        vector_embedding_dimension=vector_embedding_dimension,
+        vector_memory_top_k=vector_memory_top_k,
         agent_tool_http_allowlist=_read_csv_tuple(
             os.getenv("SYNAPSE_AGENT_TOOL_HTTP_ALLOWLIST", "")
         ),

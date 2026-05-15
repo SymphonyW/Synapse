@@ -213,6 +213,7 @@ class AgentRuntime:
         agent_memory_file: str = "",
         agent_memory_max_entries_per_user: int = 80,
         agent_memory_recall_limit: int = 3,
+        agent_memory_store: MemoryStore | None = None,
         agent_tool_http_allowlist: tuple[str, ...] | list[str] | None = None,
         agent_tool_http_timeout_seconds: float = 12.0,
         agent_enable_code_execution: bool = False,
@@ -250,7 +251,7 @@ class AgentRuntime:
         self._agent_max_plan_steps = max(1, agent_max_plan_steps)
         self._agent_require_approval_for_high_risk = agent_require_approval_for_high_risk
         self._agent_memory_recall_limit = max(1, agent_memory_recall_limit)
-        self._agent_memory_store: MemoryStore = FileMemoryStore(
+        self._agent_memory_store: MemoryStore = agent_memory_store or FileMemoryStore(
             file_path=agent_memory_file,
             max_entries_per_user=agent_memory_max_entries_per_user,
         )

@@ -95,7 +95,7 @@ flowchart TD
 
 当前限制：
 
-1. Compose 文件不包含 Web 服务，前端需要本地 `npm run dev` 或后续自行补充容器化。
+1. Compose 已包含 Web 服务；默认可一键拉起前后端，也仍可在 `apps/web` 本地执行 `npm run dev` 做开发调试。
 2. 数据库由启动时自动建表，没有版本化 migration。
 3. Redis 队列使用 List + BRPop，没有 ack/reclaim 语义。
 4. 生产安全能力不足，缺少 HTTPS、Cookie Secure、CSRF、防爆破、Secret Manager 和 CI/CD。
@@ -333,7 +333,7 @@ docker compose --env-file docker-compose.vector.env up --build -d
 
 ### 方式 A：Mock 模式启动后端依赖
 
-该方式启动 `gateway`、`ai-engine`、`postgres`、`redis`。注意：当前 [docker-compose.yml](docker-compose.yml) 不包含 Web 服务。
+该方式启动 `gateway`、`ai-engine`、`postgres`、`redis` 和生产模式 `web` 服务。
 
 ```powershell
 .\scripts\dev.ps1 -Task up
@@ -345,7 +345,7 @@ docker compose --env-file docker-compose.vector.env up --build -d
 docker compose up --build -d
 ```
 
-启动 Web：
+如果要改用本地 Vite 开发模式，可单独启动 Web：
 
 ```powershell
 cd apps/web
@@ -672,6 +672,7 @@ Set-Location ..\..
 Set-Location apps/web
 npm run lint
 npm run build
+npm run test
 Set-Location ..\..
 ```
 
@@ -697,7 +698,7 @@ docker compose up --build -d
 
 1. Gateway Dockerfile 会安装 protoc 和 Go proto 插件，构建静态二进制 `/gateway`。
 2. AI Engine Dockerfile 会安装 Python requirements，生成 Python proto 代码，并以 `python -m app.main` 启动。
-3. Web 当前没有 Dockerfile，也没有被 Compose 编排。
+3. Web 通过 [apps/web/Dockerfile](apps/web/Dockerfile) 提供 `dev` / `production` 两个镜像目标，并由 Compose 默认以生产静态模式启动。
 
 生产部署待确认项：
 
@@ -729,7 +730,7 @@ docker compose up --build -d
 | 队列 | 从 Redis List 升级到支持 ack/reclaim 的消息系统 |
 | 安全 | 开启 HTTPS、Cookie Secure、CSRF、防爆破、密钥管理 |
 | 接口文档 | 从 router/handler 生成 OpenAPI，并提供 Postman/Apifox 集合 |
-| Web 部署 | 增加 Web Dockerfile 或静态托管说明 |
+| Web 工程质量 | 在现有 Vitest/RTL 基础上继续补充更细粒度组件测试与 E2E |
 | 可观测性 | 接入结构化日志、metrics、trace 和任务级 dashboard |
 | 工具生态 | 扩展 OpenAPI 复杂参数序列化、MCP HTTP/SSE transport 和权限配置 UI |
 | 模型治理 | 增加 provider 路由、fallback、熔断、限流和成本统计 |

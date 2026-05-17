@@ -4,6 +4,7 @@ import type {
   MemoryRecallHit,
   MemoryRecord,
 } from './types'
+import { apiRequest } from '../../shared/api/client'
 
 type MemoryListResponse = {
   items: MemoryRecord[]
@@ -15,49 +16,6 @@ type MemoryRecallResponse = {
   count: number
 }
 
-function readErrorMessage(payload: unknown): string {
-  if (typeof payload !== 'object' || payload === null || Array.isArray(payload)) {
-    return ''
-  }
-
-  const record = payload as Record<string, unknown>
-  const error = record.error
-  if (typeof error === 'string' && error.trim() !== '') {
-    return error.trim()
-  }
-
-  const message = record.message
-  return typeof message === 'string' ? message.trim() : ''
-}
-
-async function requestMemoryJson<T>(url: string, init?: RequestInit): Promise<T> {
-  const response = await fetch(url, {
-    ...init,
-    credentials: init?.credentials ?? 'include',
-    headers: {
-      'Content-Type': 'application/json',
-      ...(init?.headers ?? {}),
-    },
-  })
-
-  if (!response.ok) {
-    let detail = `${response.status} ${response.statusText}`
-    try {
-      const payload: unknown = await response.json()
-      const parsed = readErrorMessage(payload)
-      if (parsed !== '') {
-        detail = parsed
-      }
-    } catch {
-      // 保留 HTTP 状态文本，避免把 JSON 解析失败暴露成无关错误。
-    }
-
-    throw new Error(detail)
-  }
-
-  return (await response.json()) as T
-}
-
 function appendOptionalUserID(params: URLSearchParams, userId?: string): void {
   const normalized = userId?.trim()
   if (normalized) {
@@ -66,6 +24,10 @@ function appendOptionalUserID(params: URLSearchParams, userId?: string): void {
 }
 
 export async function listMemories(params: MemoryListParams = {}): Promise<MemoryListResponse> {
+  return apiRequest<MemoryListResponse>(buildMemoryListPath(params))
+}
+
+export function buildMemoryListPath(params: MemoryListParams = {}): string {
   const query = new URLSearchParams()
   if (typeof params.limit === 'number' && Number.isFinite(params.limit)) {
     query.set('limit', String(params.limit))
@@ -73,7 +35,7 @@ export async function listMemories(params: MemoryListParams = {}): Promise<Memor
   appendOptionalUserID(query, params.userId)
 
   const suffix = query.toString()
-  return requestMemoryJson<MemoryListResponse>(`/v1/memories${suffix ? `?${suffix}` : ''}`)
+  return `/v1/memories${suffix ? `?${suffix}` : ''}`
 }
 
 export async function recallMemories(
@@ -81,16 +43,24 @@ export async function recallMemories(
   limit: number,
   userId?: string,
 ): Promise<MemoryRecallResponse> {
+  return apiRequest<MemoryRecallResponse>(buildRecallMemoryPath(queryText, limit, userId))
+}
+
+export function buildRecallMemoryPath(
+  queryText: string,
+  limit: number,
+  userId?: string,
+): string {
   const query = new URLSearchParams()
   query.set('query', queryText)
   query.set('limit', String(limit))
   appendOptionalUserID(query, userId)
 
-  return requestMemoryJson<MemoryRecallResponse>(`/v1/memories/recall?${query.toString()}`)
+  return `/v1/memories/recall?${query.toString()}`
 }
 
 export async function createMemory(payload: CreateMemoryPayload): Promise<MemoryRecord> {
-  return requestMemoryJson<MemoryRecord>('/v1/memories', {
+  return apiRequest<MemoryRecord>('/v1/memories', {
     body: JSON.stringify(payload),
     method: 'POST',
   })
@@ -100,7 +70,7 @@ export async function deleteMemory(memoryId: string, userId?: string): Promise<v
   const query = new URLSearchParams()
   appendOptionalUserID(query, userId)
   const suffix = query.toString()
-  await requestMemoryJson<{ deleted: boolean; memory_id: string }>(
+  await apiRequest<{ deleted: boolean; memory_id: string }>(
     `/v1/memories/${encodeURIComponent(memoryId)}${suffix ? `?${suffix}` : ''}`,
     { method: 'DELETE' },
   )

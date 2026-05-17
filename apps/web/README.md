@@ -30,12 +30,32 @@ npm run dev
 npm run build
 ```
 
+测试：
+
+```bash
+npm run test
+```
+
+容器化：
+
+```bash
+# 生产静态模式
+docker compose up --build -d web
+
+# 容器内 Vite 开发模式
+docker compose --profile web-dev up --build web-dev
+```
+
+生产模式通过 Nginx 托管 `dist`，并把 `/v1`、`/healthz` 反代到 `gateway`。
+
 ## 3. 视图与核心能力
 
-前端提供两种视图模式，并保存在本地存储：
+前端提供四种视图模式，并保存在本地存储：
 
 - `client`：用户端
+- `memory`：长期记忆
 - `ops`：运维端
+- `policy`：工具策略
 
 本地存储键：
 
@@ -128,3 +148,11 @@ SSE 行为：
 
 - 会话采用单机 Cookie + 存储层会话表，暂未接入跨域场景下的 CSRF 防护策略。
 - 普通用户任务列表当前由网关在通用列表结果上做权限过滤，尚未拆分为独立的按用户分页查询接口。
+
+## 8. 工程结构
+
+- `src/features/*`：按业务域拆分
+- `src/shared/api`：统一 API client 与前端配置
+- `src/shared/hooks`：健康检查与 SSE
+- `src/shared/types`：共享领域类型
+- `src/shared/components`：应用壳层组件

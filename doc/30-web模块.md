@@ -1,12 +1,18 @@
 # Web 模块
 
-Web 是 Synapse 的操作入口，提供普通用户聊天视图和管理员运维视图。当前 Web 使用 Vite 本地启动，未被 [docker-compose.yml](../docker-compose.yml) 编排。
+Web 是 Synapse 的操作入口，提供普通用户聊天视图和管理员运维视图。当前 Web 既可用 Vite 本地启动，也已被 [docker-compose.yml](../docker-compose.yml) 编排为独立服务。
 
 ## 关键文件
 
 | 文件 | 说明 |
 |---|---|
-| [App.tsx](../apps/web/src/App.tsx) | 主要页面、状态、API 调用和 SSE 逻辑 |
+| [App.tsx](../apps/web/src/App.tsx) | 顶层布局、模式切换与页面编排 |
+| [shared/api/client.ts](../apps/web/src/shared/api/client.ts) | 统一 API client、错误处理和 JSON 解析 |
+| [shared/hooks/useTaskEvents.ts](../apps/web/src/shared/hooks/useTaskEvents.ts) | SSE、续传、事件缓存和历史补水 |
+| [features/auth](../apps/web/src/features/auth) | 鉴权请求、会话 hook 和登录组件 |
+| [features/chat](../apps/web/src/features/chat) | 用户端聊天面板 |
+| [features/ops](../apps/web/src/features/ops) | 运维主面板与死信 hook |
+| [features/tasks](../apps/web/src/features/tasks) | 任务 API、任务 hook、任务列表和详情 |
 | [App.css](../apps/web/src/App.css) | 页面样式 |
 | [features/trace](../apps/web/src/features/trace) | Agent Trace parser、工作台组件和导出逻辑 |
 | [main.tsx](../apps/web/src/main.tsx) | React 入口 |
@@ -39,6 +45,18 @@ Vite 代理：
 |---|---|
 | `/v1` | `http://127.0.0.1:8080` |
 | `/healthz` | `http://127.0.0.1:8080` |
+
+容器化启动：
+
+```powershell
+docker compose up --build -d
+```
+
+默认访问地址仍为 `http://127.0.0.1:5173`。若要用容器内 Vite 开发模式，可执行：
+
+```powershell
+docker compose --profile web-dev up --build web-dev
+```
 
 ## 视图模式
 
@@ -81,6 +99,25 @@ localStorage：
 | 当前任务详情 | 1.5 秒轮询，作为 SSE 兜底 |
 | 死信列表 | 5 秒轮询，仅运维视图 |
 | SSE | 选中任务后连接，收到 terminal 后关闭 |
+
+## 工程结构
+
+前端现按“特性 + shared”拆分：
+
+| 目录 | 职责 |
+|---|---|
+| `features/auth` | 登录/注册、会话恢复 |
+| `features/chat` | 用户聊天入口、会话列表、Agent 时间线 |
+| `features/ops` | 运维台、死信 |
+| `features/tasks` | 任务 API、任务状态与任务视图 |
+| `features/memory` | 长期记忆 |
+| `features/tool-policy` | 工具策略 |
+| `features/trace` | Trace 工作台 |
+| `shared/api` | API base path、统一 client |
+| `shared/hooks` | `useHealth`、`useTaskEvents` |
+| `shared/types` / `shared/utils` / `shared/components` | 公共类型、工具函数和壳层组件 |
+
+详见 [31-web前端工程结构](31-web前端工程结构.md)。
 
 ## Agent Trace 工作台
 
@@ -153,8 +190,8 @@ localStorage：
 
 | 限制 | 建议 |
 |---|---|
-| `App.tsx` 较大 | 继续拆分 auth/chat/ops hooks；Trace 工作台已先独立到 `features/trace` |
-| 没有前端测试 | 增加关键交互 E2E 和组件测试 |
-| 未容器化 | 增加 Web Dockerfile 或静态托管说明 |
+| `App.tsx` 已显著缩小 | 继续约束页面逻辑只做编排，不再回流业务实现 |
+| 当前以单元/组件测试为主 | 后续可继续补充关键链路 E2E |
+| 已完成基础容器化 | 后续可补充正式反向代理、缓存和观测策略 |
 | 记忆页展示的是后端返回的原始 score | `file` 与 `vector` 后端 score 语义不同，UI 暂不额外解释 |
-| 状态管理复杂 | 可引入 React Query 等数据层 |
+| 状态管理仍有复杂度 | 先维持轻量 hooks 分层；只有在缓存/并发需求继续上升时再评估 React Query |

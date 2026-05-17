@@ -22,14 +22,15 @@ const (
 
 // Task 是任务主记录，包含请求输入和当前状态。
 type Task struct {
-	ID        string            `json:"id"`
-	UserID    string            `json:"user_id"`
-	Prompt    string            `json:"prompt"`
-	Status    TaskStatus        `json:"status"`
-	Error     string            `json:"error,omitempty"`
-	Metadata  map[string]string `json:"metadata,omitempty"`
-	CreatedAt time.Time         `json:"created_at"`
-	UpdatedAt time.Time         `json:"updated_at"`
+	ID             string            `json:"id"`
+	UserID         string            `json:"user_id"`
+	Prompt         string            `json:"prompt"`
+	Status         TaskStatus        `json:"status"`
+	Error          string            `json:"error,omitempty"`
+	ReplayOfTaskID string            `json:"replay_of_task_id,omitempty"`
+	Metadata       map[string]string `json:"metadata,omitempty"`
+	CreatedAt      time.Time         `json:"created_at"`
+	UpdatedAt      time.Time         `json:"updated_at"`
 }
 
 // TaskEvent 是任务执行过程中的增量事件，主要用于 SSE 推送与审计。

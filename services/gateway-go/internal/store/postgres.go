@@ -66,13 +66,14 @@ func (s *PostgresStore) Create(task domain.Task) error {
 	// metadata 使用 JSONB 存储，便于后续字段扩展而无需频繁改表。
 	_, err = s.db.ExecContext(
 		ctx,
-		`INSERT INTO tasks (id, user_id, prompt, status, error, metadata, created_at, updated_at)
-		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+		`INSERT INTO tasks (id, user_id, prompt, status, error, replay_of_task_id, metadata, created_at, updated_at)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
 		task.ID,
 		task.UserID,
 		task.Prompt,
 		string(task.Status),
 		task.Error,
+		nullIfBlank(task.ReplayOfTaskID),
 		metadataJSON,
 		task.CreatedAt,
 		task.UpdatedAt,
@@ -96,7 +97,7 @@ func (s *PostgresStore) Get(taskID string) (domain.Task, bool) {
 
 	row := s.db.QueryRowContext(
 		ctx,
-		`SELECT id, user_id, prompt, status, error, metadata, created_at, updated_at
+		`SELECT id, user_id, prompt, status, error, replay_of_task_id, metadata, created_at, updated_at
 		 FROM tasks WHERE id = $1`,
 		taskID,
 	)
@@ -122,7 +123,7 @@ func (s *PostgresStore) ListTasks(limit int, status string) ([]domain.Task, erro
 	defer cancel()
 
 	// 仅在存在 status 过滤时动态拼接 SQL，仍保持占位符安全与顺序一致。
-	query := `SELECT id, user_id, prompt, status, error, metadata, created_at, updated_at
+	query := `SELECT id, user_id, prompt, status, error, replay_of_task_id, metadata, created_at, updated_at
 		 FROM tasks`
 	args := make([]any, 0, 2)
 	if status != "" {
@@ -157,6 +158,44 @@ func (s *PostgresStore) ListTasks(limit int, status string) ([]domain.Task, erro
 	return tasks, nil
 }
 
+func (s *PostgresStore) ListReplays(taskID string, limit int) ([]domain.Task, error) {
+	if limit <= 0 {
+		limit = 50
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), dbOperationTimeout)
+	defer cancel()
+
+	rows, err := s.db.QueryContext(
+		ctx,
+		`SELECT id, user_id, prompt, status, error, replay_of_task_id, metadata, created_at, updated_at
+		 FROM tasks
+		 WHERE replay_of_task_id = $1
+		 ORDER BY created_at DESC
+		 LIMIT $2`,
+		taskID,
+		limit,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	replays := make([]domain.Task, 0)
+	for rows.Next() {
+		task, err := scanTask(rows)
+		if err != nil {
+			return nil, err
+		}
+		replays = append(replays, task)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	return replays, nil
+}
+
 // ListTasksByConversation 按用户和会话返回历史任务，按创建时间升序返回。
 func (s *PostgresStore) ListTasksByConversation(userID string, conversationID string, limit int) ([]domain.Task, error) {
 	trimmedUserID := strings.TrimSpace(userID)
@@ -174,7 +213,7 @@ func (s *PostgresStore) ListTasksByConversation(userID string, conversationID st
 
 	rows, err := s.db.QueryContext(
 		ctx,
-		`SELECT id, user_id, prompt, status, error, metadata, created_at, updated_at
+		`SELECT id, user_id, prompt, status, error, replay_of_task_id, metadata, created_at, updated_at
 		 FROM tasks
 		 WHERE user_id = $1
 		   AND (
@@ -266,7 +305,7 @@ func (s *PostgresStore) UpdateStatus(taskID string, status domain.TaskStatus, er
 		`UPDATE tasks
 		 SET status = $2, error = $3, updated_at = NOW()
 		 WHERE id = $1
-		 RETURNING id, user_id, prompt, status, error, metadata, created_at, updated_at`,
+		 RETURNING id, user_id, prompt, status, error, replay_of_task_id, metadata, created_at, updated_at`,
 		taskID,
 		string(status),
 		errorMessage,
@@ -329,7 +368,7 @@ func (s *PostgresStore) UpdateMetadata(taskID string, metadataUpdates map[string
 		`UPDATE tasks
 		 SET metadata = $2, updated_at = NOW()
 		 WHERE id = $1
-		 RETURNING id, user_id, prompt, status, error, metadata, created_at, updated_at`,
+		 RETURNING id, user_id, prompt, status, error, replay_of_task_id, metadata, created_at, updated_at`,
 		taskID,
 		metadataJSON,
 	)
@@ -839,10 +878,13 @@ func (s *PostgresStore) ensureSchema(ctx context.Context) error {
 		 prompt TEXT NOT NULL,
 		 status TEXT NOT NULL,
 		 error TEXT NOT NULL DEFAULT '',
+		 replay_of_task_id TEXT NULL REFERENCES tasks(id) ON DELETE SET NULL,
 		 metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
 		 created_at TIMESTAMPTZ NOT NULL,
 		 updated_at TIMESTAMPTZ NOT NULL
 		);
+
+		ALTER TABLE tasks ADD COLUMN IF NOT EXISTS replay_of_task_id TEXT NULL REFERENCES tasks(id) ON DELETE SET NULL;
 
 		CREATE TABLE IF NOT EXISTS task_events (
 		 id BIGSERIAL PRIMARY KEY,
@@ -893,6 +935,8 @@ func (s *PostgresStore) ensureSchema(ctx context.Context) error {
 		CREATE INDEX IF NOT EXISTS idx_task_events_task_id_id ON task_events (task_id, id);
 		CREATE INDEX IF NOT EXISTS idx_tasks_user_conversation_created
 		 ON tasks (user_id, (metadata->>'conversation_id'), created_at DESC);
+		CREATE INDEX IF NOT EXISTS idx_tasks_replay_of_created
+		 ON tasks (replay_of_task_id, created_at DESC);
 		CREATE INDEX IF NOT EXISTS idx_auth_sessions_username ON auth_sessions (username);
 		CREATE INDEX IF NOT EXISTS idx_auth_sessions_expires_at ON auth_sessions (expires_at);`,
 	)
@@ -909,6 +953,7 @@ func scanTask(scanner rowScanner) (domain.Task, error) {
 	var task domain.Task
 	var metadataRaw []byte
 	var status string
+	var replayOfTaskID sql.NullString
 
 	if err := scanner.Scan(
 		&task.ID,
@@ -916,6 +961,7 @@ func scanTask(scanner rowScanner) (domain.Task, error) {
 		&task.Prompt,
 		&status,
 		&task.Error,
+		&replayOfTaskID,
 		&metadataRaw,
 		&task.CreatedAt,
 		&task.UpdatedAt,
@@ -924,6 +970,9 @@ func scanTask(scanner rowScanner) (domain.Task, error) {
 	}
 
 	task.Status = domain.TaskStatus(status)
+	if replayOfTaskID.Valid {
+		task.ReplayOfTaskID = replayOfTaskID.String
+	}
 	if len(metadataRaw) > 0 {
 		if err := json.Unmarshal(metadataRaw, &task.Metadata); err != nil {
 			return domain.Task{}, err
@@ -934,4 +983,12 @@ func scanTask(scanner rowScanner) (domain.Task, error) {
 	}
 
 	return task, nil
+}
+
+func nullIfBlank(value string) any {
+	trimmed := strings.TrimSpace(value)
+	if trimmed == "" {
+		return nil
+	}
+	return trimmed
 }

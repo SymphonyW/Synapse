@@ -19,6 +19,7 @@ type TaskStore interface {
 	Create(task domain.Task) error
 	// Get 按 ID 查询任务。
 	Get(taskID string) (domain.Task, bool)
+	ListReplays(taskID string, limit int) ([]domain.Task, error)
 	// ListTasks 按更新时间倒序列出任务，可按状态过滤。
 	ListTasks(limit int, status string) ([]domain.Task, error)
 	// ListTasksByConversation 按用户和会话读取历史任务。

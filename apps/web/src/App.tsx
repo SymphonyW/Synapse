@@ -5,6 +5,10 @@ import remarkBreaks from 'remark-breaks'
 import remarkGfm from 'remark-gfm'
 import { MemoryPanel } from './features/memory/MemoryPanel'
 import { ToolPolicyPanel } from './features/tool-policy/ToolPolicyPanel'
+import {
+  ReplayDiffPanel,
+  type ReplayComparePayload,
+} from './features/trace/ReplayDiffPanel'
 import { TraceWorkbench } from './features/trace/TraceWorkbench'
 import './App.css'
 
@@ -21,6 +25,7 @@ type Task = {
   prompt: string
   status: TaskStatus
   error?: string
+  replay_of_task_id?: string
   metadata?: Record<string, string>
   created_at: string
   updated_at: string
@@ -47,6 +52,11 @@ type DeadLetterResponse = {
 }
 
 type TaskListResponse = {
+  items: Task[]
+  count: number
+}
+
+type TaskReplayListResponse = {
   items: Task[]
   count: number
 }
@@ -486,6 +496,12 @@ function App() {
   const [events, setEvents] = useState<StreamEvent[]>([])
   const [eventsByTaskID, setEventsByTaskID] = useState<Record<string, StreamEvent[]>>({})
   const [lastEventID, setLastEventID] = useState(0)
+  const [taskReplays, setTaskReplays] = useState<Task[]>([])
+  const [taskReplaysLoaded, setTaskReplaysLoaded] = useState(false)
+  const [loadingTaskReplays, setLoadingTaskReplays] = useState(false)
+  const [loadingReplayCompare, setLoadingReplayCompare] = useState(false)
+  const [replayCompareData, setReplayCompareData] = useState<ReplayComparePayload | null>(null)
+  const [replayCompareError, setReplayCompareError] = useState('')
   const [deadLetters, setDeadLetters] = useState<DeadLetterTask[]>([])
   const [health, setHealth] = useState<HealthResponse | null>(null)
   const [streamState, setStreamState] = useState<StreamState>('idle')
@@ -543,6 +559,13 @@ function App() {
     () => tasks.find((task) => task.id === selectedTaskID),
     [tasks, selectedTaskID],
   )
+
+  useEffect(() => {
+    setTaskReplays([])
+    setTaskReplaysLoaded(false)
+    setReplayCompareData(null)
+    setReplayCompareError('')
+  }, [selectedTaskID])
 
   const isCancelableTask = (task: Task): boolean =>
     task.status === 'queued' || task.status === 'running' || task.status === 'paused'
@@ -1366,6 +1389,43 @@ function App() {
     }
   }
 
+  const refreshTaskReplays = async (taskID: string) => {
+    setLoadingTaskReplays(true)
+    setReplayCompareError('')
+    try {
+      const response = await requestJson<TaskReplayListResponse>(`/v1/tasks/${taskID}/replays`)
+      setTaskReplays(response.items)
+      setTaskReplaysLoaded(true)
+    } catch (error) {
+      setReplayCompareError(
+        error instanceof Error
+          ? error.message
+          : tr('获取 replay 列表失败', 'Failed to fetch replay list'),
+      )
+    } finally {
+      setLoadingTaskReplays(false)
+    }
+  }
+
+  const compareReplayTask = async (taskID: string, replayTaskID: string) => {
+    setLoadingReplayCompare(true)
+    setReplayCompareError('')
+    try {
+      const response = await requestJson<ReplayComparePayload>(
+        `/v1/tasks/${taskID}/compare/${replayTaskID}`,
+      )
+      setReplayCompareData(response)
+    } catch (error) {
+      setReplayCompareError(
+        error instanceof Error
+          ? error.message
+          : tr('获取 replay 对比失败', 'Failed to compare replay'),
+      )
+    } finally {
+      setLoadingReplayCompare(false)
+    }
+  }
+
   const refreshDeadLetters = async () => {
     if (!isAdmin || viewMode !== 'ops') {
       setDeadLetters([])
@@ -1934,16 +1994,16 @@ function App() {
       })
 
       upsertTask(replayed)
-      taskLastEventIDRef.current[taskID] = 0
+      taskLastEventIDRef.current[replayed.id] = 0
       setResponseByTaskID((previous) => ({
         ...previous,
-        [taskID]: '',
+        [replayed.id]: '',
       }))
       setEventsByTaskID((previous) => ({
         ...previous,
-        [taskID]: [],
+        [replayed.id]: [],
       }))
-      setSelectedTaskID(taskID)
+      setSelectedTaskID(replayed.id)
       setEvents([])
       setLastEventID(0)
       await refreshTasks()
@@ -3104,6 +3164,25 @@ function App() {
             />
           ) : (
             <p className="empty">{tr('暂无事件。', 'No events yet.')}</p>
+          )}
+
+          {selectedTask && (
+            <ReplayDiffPanel
+              compareData={replayCompareData}
+              error={replayCompareError}
+              language={language}
+              loadingCompare={loadingReplayCompare}
+              loadingReplays={loadingTaskReplays}
+              onCloseCompare={() => setReplayCompareData(null)}
+              onCompareReplay={(replayTaskID) => {
+                void compareReplayTask(selectedTask.id, replayTaskID)
+              }}
+              onRefreshReplays={() => {
+                void refreshTaskReplays(selectedTask.id)
+              }}
+              replays={taskReplays}
+              replaysLoaded={taskReplaysLoaded}
+            />
           )}
         </section>
 

@@ -92,6 +92,34 @@ func (s *InMemoryStore) ListTasks(limit int, status string) ([]domain.Task, erro
 	return tasks, nil
 }
 
+func (s *InMemoryStore) ListReplays(taskID string, limit int) ([]domain.Task, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	replays := make([]domain.Task, 0)
+	for _, task := range s.tasks {
+		if strings.TrimSpace(task.ReplayOfTaskID) != strings.TrimSpace(taskID) {
+			continue
+		}
+		replays = append(replays, cloneTask(task))
+	}
+
+	sort.Slice(replays, func(i, j int) bool {
+		left := replays[i]
+		right := replays[j]
+		if left.CreatedAt.Equal(right.CreatedAt) {
+			return left.UpdatedAt.After(right.UpdatedAt)
+		}
+		return left.CreatedAt.After(right.CreatedAt)
+	})
+
+	if limit > 0 && len(replays) > limit {
+		replays = replays[:limit]
+	}
+
+	return replays, nil
+}
+
 // ListTasksByConversation 按用户和会话读取历史任务，按创建时间升序返回。
 func (s *InMemoryStore) ListTasksByConversation(userID string, conversationID string, limit int) ([]domain.Task, error) {
 	s.mu.RLock()

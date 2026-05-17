@@ -7,7 +7,7 @@
     "dev": "vite",
     "build": "tsc -b && vite build",
     "lint": "eslint .",
-    "test:trace": "node --test --experimental-strip-types src/features/trace/traceParser.test.ts",
+    "test:trace": "node --test --experimental-strip-types src/features/trace/traceParser.test.ts src/features/trace/traceDiff.test.ts",
     "preview": "vite preview"
   },
   "dependencies": {

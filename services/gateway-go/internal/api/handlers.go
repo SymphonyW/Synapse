@@ -77,6 +77,15 @@ type deleteConversationResponse struct {
 	DeletedTaskIDs []string `json:"deleted_task_ids"`
 }
 
+type compareReplayTasksResponse struct {
+	BaseTask             domain.Task        `json:"base_task"`
+	OtherTask            domain.Task        `json:"other_task"`
+	BaseEvents           []domain.TaskEvent `json:"base_events"`
+	OtherEvents          []domain.TaskEvent `json:"other_events"`
+	BaseEventsTruncated  bool               `json:"base_events_truncated"`
+	OtherEventsTruncated bool               `json:"other_events_truncated"`
+}
+
 var errTaskTerminalState = errors.New("task already in terminal state")
 var errTaskPermissionDenied = errors.New("permission denied")
 
@@ -85,8 +94,11 @@ const (
 	defaultDeadLetterLimit = 100
 	maxDeadLetterLimit     = 500
 	// 任务列表默认参数偏向控制台场景（近期任务优先）。
-	defaultTaskListLimit = 50
-	maxTaskListLimit     = 500
+	defaultTaskListLimit   = 50
+	maxTaskListLimit       = 500
+	defaultReplayListLimit = 50
+	maxReplayListLimit     = 200
+	compareEventLoadLimit  = 8000
 	// 会话上下文仅保留最近若干轮，避免 prompt 无界增长。
 	conversationContextTurnLimit = 8
 	conversationEventLoadLimit   = 8000
@@ -397,23 +409,36 @@ func (h *Handler) ReplayTask(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// 重放前清空历史错误与死信记录，让任务以干净状态重新开始。
-	updatedTask, ok := h.store.UpdateStatus(taskID, domain.TaskQueued, "")
-	if !ok {
-		writeJSON(w, http.StatusNotFound, map[string]string{"error": "task not found"})
+	now := time.Now().UTC()
+	replayTask := domain.Task{
+		ID:             uuid.NewString(),
+		UserID:         task.UserID,
+		Prompt:         task.Prompt,
+		Status:         domain.TaskQueued,
+		ReplayOfTaskID: task.ID,
+		Metadata:       cloneReplayMetadata(task.Metadata),
+		CreatedAt:      now,
+		UpdatedAt:      now,
+	}
+	if err := h.store.Create(replayTask); err != nil {
+		if errors.Is(err, store.ErrTaskAlreadyExists) {
+			writeJSON(w, http.StatusConflict, map[string]string{"error": err.Error()})
+			return
+		}
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to create replay task"})
 		return
 	}
 
 	_ = h.store.ClearDeadLetter(taskID)
 	_, _ = h.store.AppendEvent(taskID, domain.TaskEvent{
 		Type:            "replay_requested",
-		Message:         "task replay requested",
+		Message:         "task replay requested: " + replayTask.ID,
 		EmittedAtUnixMS: time.Now().UTC().UnixMilli(),
 	})
 
-	if err := h.taskQueue.Enqueue(r.Context(), taskID); err != nil {
-		h.store.UpdateStatus(taskID, domain.TaskFailed, "failed to enqueue replay task")
-		_, _ = h.store.AppendEvent(taskID, domain.TaskEvent{
+	if err := h.taskQueue.Enqueue(r.Context(), replayTask.ID); err != nil {
+		h.store.UpdateStatus(replayTask.ID, domain.TaskFailed, "failed to enqueue replay task")
+		_, _ = h.store.AppendEvent(replayTask.ID, domain.TaskEvent{
 			Type:            "failed",
 			Message:         "failed to enqueue replay task",
 			EmittedAtUnixMS: time.Now().UTC().UnixMilli(),
@@ -422,7 +447,93 @@ func (h *Handler) ReplayTask(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	writeJSON(w, http.StatusAccepted, updatedTask)
+	writeJSON(w, http.StatusAccepted, replayTask)
+}
+
+// ListTaskReplays returns replay children for a source task.
+func (h *Handler) ListTaskReplays(w http.ResponseWriter, r *http.Request) {
+	session, ok := h.requireSession(w, r)
+	if !ok {
+		return
+	}
+
+	taskID := r.PathValue("taskID")
+	task, ok := h.store.Get(taskID)
+	if !ok {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "task not found"})
+		return
+	}
+	if !canAccessTask(session, task) {
+		writeJSON(w, http.StatusForbidden, map[string]string{"error": "forbidden"})
+		return
+	}
+
+	limit, err := parseLimit(r.URL.Query().Get("limit"), defaultReplayListLimit, maxReplayListLimit)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid limit"})
+		return
+	}
+
+	replays, err := h.store.ListReplays(taskID, limit)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to list replays"})
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]any{
+		"items": replays,
+		"count": len(replays),
+	})
+}
+
+// CompareReplayTasks returns source/replay snapshots so the web UI can reuse the trace parser for diffing.
+func (h *Handler) CompareReplayTasks(w http.ResponseWriter, r *http.Request) {
+	session, ok := h.requireSession(w, r)
+	if !ok {
+		return
+	}
+
+	taskID := r.PathValue("taskID")
+	otherTaskID := r.PathValue("otherTaskID")
+	baseTask, ok := h.store.Get(taskID)
+	if !ok {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "task not found"})
+		return
+	}
+	otherTask, ok := h.store.Get(otherTaskID)
+	if !ok {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "task not found"})
+		return
+	}
+
+	if !canAccessTask(session, baseTask) || !canAccessTask(session, otherTask) {
+		writeJSON(w, http.StatusForbidden, map[string]string{"error": "forbidden"})
+		return
+	}
+	if strings.TrimSpace(otherTask.ReplayOfTaskID) != strings.TrimSpace(baseTask.ID) {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "tasks are not replay-related"})
+		return
+	}
+
+	baseEvents, baseTruncated, err := h.loadEventsForCompare(baseTask.ID)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to load base task events"})
+		return
+	}
+	otherEvents, otherTruncated, err := h.loadEventsForCompare(otherTask.ID)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to load replay task events"})
+		return
+	}
+
+	writeJSON(w, http.StatusOK, compareReplayTasksResponse{
+		BaseTask:             baseTask,
+		OtherTask:            otherTask,
+		BaseEvents:           baseEvents,
+		OtherEvents:          otherEvents,
+		BaseEventsTruncated:  baseTruncated,
+		OtherEventsTruncated: otherTruncated,
+	})
 }
 
 // ApproveTask 对 paused 任务授予审批并重新入队，从暂停点恢复执行。
@@ -946,6 +1057,43 @@ func isEligibleConversationAssistantMessage(message string) bool {
 	}
 
 	return true
+}
+
+func cloneReplayMetadata(metadata map[string]string) map[string]string {
+	cloned := make(map[string]string, len(metadata))
+	for key, value := range metadata {
+		cloned[key] = value
+	}
+
+	for _, key := range []string{
+		metadataConversationIDKey,
+		metadataUserMessageKey,
+		metadataClientViewKey,
+		metadataApprovalGrantedKey,
+		metadataApprovedToolsKey,
+		metadataApprovedToolCallKey,
+		metadataAgentResumeStepKey,
+		metadataAgentRequiredToolKey,
+		metadataAgentRequiredToolInputKey,
+		metadataAgentRequiredToolRiskKey,
+		metadataAgentRequiredReasonKey,
+		metadataAgentResumeRequestedByKey,
+	} {
+		delete(cloned, key)
+	}
+
+	return cloned
+}
+
+func (h *Handler) loadEventsForCompare(taskID string) ([]domain.TaskEvent, bool, error) {
+	events, err := h.store.ListEvents(taskID, 0, compareEventLoadLimit+1)
+	if err != nil {
+		return nil, false, err
+	}
+	if len(events) > compareEventLoadLimit {
+		return events[:compareEventLoadLimit], true, nil
+	}
+	return events, false, nil
 }
 
 // parseLastEventID 解析并校验 SSE 续传游标。

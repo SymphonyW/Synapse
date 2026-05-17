@@ -2570,6 +2570,247 @@ button:not(:disabled):hover {
   gap: 8px;
 }
 
+.replay-diff-shell {
+  border: 1px solid #d6e5f2;
+  border-radius: 14px;
+  background:
+    radial-gradient(circle at 100% 0%, rgba(14, 165, 233, 0.12), transparent 36%),
+    linear-gradient(180deg, #ffffff, #f8fbff);
+  padding: 10px;
+  display: grid;
+  gap: 10px;
+}
+
+.replay-diff-toolbar,
+.replay-diff-heading,
+.replay-list-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.replay-diff-toolbar strong {
+  color: #173f5f;
+}
+
+.replay-diff-toolbar p,
+.replay-diff-empty,
+.replay-diff-error,
+.replay-diff-warning {
+  margin: 3px 0 0;
+  color: #486987;
+  font-size: 0.82rem;
+}
+
+.replay-diff-error {
+  color: #9b1c1c;
+}
+
+.replay-diff-warning {
+  border: 1px solid #f2d7ab;
+  border-radius: 12px;
+  background: #fffaf2;
+  color: #8a4f08;
+  padding: 8px;
+}
+
+.replay-list {
+  display: grid;
+  gap: 8px;
+}
+
+.replay-list-item {
+  border: 1px solid #dbe8f4;
+  border-radius: 12px;
+  background: #fbfdff;
+  padding: 8px;
+}
+
+.replay-list-item > div {
+  min-width: 0;
+  display: grid;
+  gap: 3px;
+}
+
+.replay-list-item strong,
+.replay-diff-heading strong {
+  color: #173f5f;
+  font-family: 'IBM Plex Mono', monospace;
+  overflow-wrap: anywhere;
+}
+
+.replay-list-item span,
+.replay-diff-heading span {
+  color: #68819a;
+  font-size: 0.76rem;
+}
+
+.replay-diff-panel {
+  display: grid;
+  gap: 10px;
+}
+
+.replay-diff-heading {
+  border-top: 1px solid #e4eef7;
+  padding-top: 10px;
+}
+
+.replay-diff-heading > div {
+  min-width: 0;
+  display: grid;
+  gap: 3px;
+}
+
+.replay-summary-grid,
+.replay-evaluate-grid,
+.replay-stage-grid {
+  display: grid;
+  gap: 8px;
+}
+
+.replay-summary-grid {
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+}
+
+.replay-evaluate-grid,
+.replay-stage-grid {
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+}
+
+.replay-summary-grid div,
+.replay-evaluate-grid div,
+.replay-stage-grid div {
+  min-width: 0;
+  border: 1px solid #d6e5f2;
+  border-radius: 12px;
+  background: #ffffff;
+  padding: 8px;
+  display: grid;
+  gap: 4px;
+}
+
+.replay-summary-grid div.changed,
+.replay-evaluate-grid div.changed,
+.replay-stage-grid div.changed {
+  border-color: #f2d7ab;
+  background: #fffaf2;
+}
+
+.replay-summary-grid span,
+.replay-evaluate-grid span,
+.replay-stage-grid span {
+  color: #5a7894;
+  font-size: 0.72rem;
+  text-transform: uppercase;
+}
+
+.replay-summary-grid strong,
+.replay-evaluate-grid strong,
+.replay-stage-grid strong {
+  min-width: 0;
+  color: #173f5f;
+  font-family: 'IBM Plex Mono', monospace;
+  overflow-wrap: anywhere;
+}
+
+.replay-diff-section {
+  border: 1px solid #d6e5f2;
+  border-radius: 14px;
+  background: #ffffff;
+  overflow: hidden;
+}
+
+.replay-diff-section summary {
+  cursor: pointer;
+  padding: 10px;
+  color: #173f5f;
+  font-weight: 700;
+}
+
+.replay-diff-section > :not(summary) {
+  border-top: 1px solid #e4eef7;
+}
+
+.replay-stage-grid,
+.replay-tool-sequence,
+.replay-evaluate-grid,
+.replay-text-diff {
+  padding: 10px;
+}
+
+.replay-tool-sequence {
+  display: grid;
+  gap: 8px;
+}
+
+.replay-tool-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+  gap: 8px;
+  align-items: center;
+  border: 1px solid #dbe8f4;
+  border-radius: 12px;
+  background: #fbfdff;
+  padding: 8px;
+}
+
+.replay-tool-row em {
+  border-radius: 999px;
+  font-style: normal;
+  font-size: 0.72rem;
+  padding: 3px 8px;
+  color: #315b7c;
+  background: #edf6ff;
+}
+
+.replay-tool-row span {
+  color: #173f5f;
+  font-family: 'IBM Plex Mono', monospace;
+  overflow-wrap: anywhere;
+}
+
+.replay-tool-row.added {
+  border-color: #b8e6d8;
+  background: #f2fffb;
+}
+
+.replay-tool-row.removed,
+.replay-tool-row.changed {
+  border-color: #f2d7ab;
+  background: #fffaf2;
+}
+
+.replay-text-diff {
+  display: grid;
+  gap: 6px;
+}
+
+.replay-text-diff p {
+  margin: 0;
+  border-radius: 10px;
+  padding: 7px 8px;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 8px;
+  color: #173f5f;
+  background: #fbfdff;
+}
+
+.replay-text-diff p.added {
+  background: #f2fffb;
+  color: #166534;
+}
+
+.replay-text-diff p.removed {
+  background: #fff5f5;
+  color: #9b1c1c;
+}
+
+.replay-text-diff span {
+  font-family: 'IBM Plex Mono', monospace;
+}
+
 .event-list {
   max-height: none;
   overflow: auto;
@@ -3052,5 +3293,22 @@ button:not(:disabled):hover {
 
   .selected-actions {
     justify-content: space-between;
+  }
+
+  .replay-diff-toolbar,
+  .replay-diff-heading,
+  .replay-list-item {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .replay-summary-grid,
+  .replay-evaluate-grid,
+  .replay-stage-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .replay-tool-row {
+    grid-template-columns: 1fr;
   }
 }

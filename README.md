@@ -749,3 +749,15 @@ docker compose up --build -d
 9. [工具策略管理中心](doc/48-功能-工具策略管理中心.md)
 10. [Agent Trace 工作台](doc/47-功能-Agent-Trace工作台.md)
 11. [真实模型 Benchmark](doc/51-功能-真实模型Benchmark.md)
+
+
+## Replay 对比与 Trace Diff
+
+Replay 现在会创建新的子任务，而不是把原任务重新洗回 `queued`。子任务通过正式字段 `replay_of_task_id` 关联原任务，原始 trace 因而可以保留，Web Trace 工作台也能在同一页面查看 replay 列表，并对比状态、耗时、计划步骤、工具序列、审批、重规划、记忆召回、`evaluate` 指标与最终回答文本差异。
+
+新增接口：
+
+1. `GET /v1/tasks/{taskID}/replays`
+2. `GET /v1/tasks/{taskID}/compare/{otherTaskID}`
+
+当前数据库仍沿用启动时自建表方案；`PostgresStore.ensureSchema` 会用 `ALTER TABLE ... ADD COLUMN IF NOT EXISTS` 补齐 `replay_of_task_id`，但仓库尚未引入独立 migration 版本管理。

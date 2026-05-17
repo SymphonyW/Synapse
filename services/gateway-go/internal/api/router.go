@@ -49,6 +49,8 @@ func NewRouter(handler *Handler) http.Handler {
 	mux.HandleFunc("POST /v1/admin/tool-policy/reload", handler.ReloadToolPolicy)
 	mux.HandleFunc("GET /v1/admin/tools", handler.ListAdminTools)
 	mux.HandleFunc("GET /v1/tasks/{taskID}", handler.GetTask)
+	mux.HandleFunc("GET /v1/tasks/{taskID}/replays", handler.ListTaskReplays)
+	mux.HandleFunc("GET /v1/tasks/{taskID}/compare/{otherTaskID}", handler.CompareReplayTasks)
 	mux.HandleFunc("POST /v1/tasks/{taskID}/cancel", handler.CancelTask)
 	mux.HandleFunc("POST /v1/tasks/{taskID}/approve", handler.ApproveTask)
 	mux.HandleFunc("POST /v1/tasks/{taskID}/replay", handler.ReplayTask)

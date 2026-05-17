@@ -1,6 +1,6 @@
 # 功能：Agent 回归评测与门禁
 
-Agent 回归评测用于在不依赖外部模型的情况下，用 mock provider 验证工具、审批、记忆、浏览、失败恢复等核心行为是否退化。
+Agent 回归评测用于在不依赖外部模型的情况下，用 mock provider 验证工具、审批、记忆、浏览、失败恢复等核心行为是否退化。它解决的是“Runtime 行为有没有退化”的问题，不解决“不同真实 provider 谁执行得更好”的问题；后者由独立的 [真实模型 Benchmark](51-功能-真实模型Benchmark.md) 负责。
 
 ## 相关实现
 
@@ -9,6 +9,7 @@ Agent 回归评测用于在不依赖外部模型的情况下，用 mock provider
 | [regression.py](../services/ai-engine-py/app/benchmarks/regression.py) | 加载 cases、运行 Runtime、计算指标、输出 JSON |
 | [cases.json](../services/ai-engine-py/app/benchmarks/cases.json) | 回归用例定义 |
 | [test_benchmarks_regression.py](../services/ai-engine-py/tests/test_benchmarks_regression.py) | 回归脚本单元测试 |
+| [live_benchmark.py](../services/ai-engine-py/app/benchmarks/live_benchmark.py) | 独立真实 provider 评测入口，不参与 mock 门禁 |
 | [scripts/dev.ps1](../scripts/dev.ps1) | `agent-regression` 脚本入口 |
 | [Makefile](../Makefile) | `make agent-regression` |
 
@@ -123,3 +124,7 @@ python -m app.benchmarks.regression
 2. 保留完整 JSON 输出，便于定位缺失事件、工具或回答片段。
 3. `cases.json` 变更需要评审，避免随意降低阈值或删除覆盖场景。
 4. 可以按标签分层执行，先跑快速基础门禁，再跑网络/浏览类扩展门禁。
+
+## 与真实模型 Benchmark 的边界
+
+mock regression 继续承担稳定、低成本、可重复的基础门禁；真实模型 benchmark 适合人工验收、模型选型和周期性对比，不应替代 mock regression。两者共享 Runtime 事件语义，但 case 集、指标和运行时机保持分层。

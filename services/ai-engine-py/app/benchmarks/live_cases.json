@@ -1,0 +1,275 @@
+[
+  {
+    "id": "direct_answer_short",
+    "title": "Direct answer without tools",
+    "prompt": "Explain in two sentences why deterministic tests are useful.",
+    "metadata": {
+      "agent_enabled": "true",
+      "auth_user_role": "user",
+      "approval_granted": "true"
+    },
+    "tags": ["direct_answer"],
+    "expectations": {
+      "expected_final_status": "completed",
+      "expect_memory_write": true
+    },
+    "allowed_tools": [],
+    "timeout_seconds": 90,
+    "judge_rules": {
+      "required_keywords": ["test"],
+      "min_answer_chars": 40,
+      "require_no_truncation": true
+    }
+  },
+  {
+    "id": "calculator_basic",
+    "title": "Calculator tool",
+    "prompt": "First calculate 8 * 9, then answer with the result.",
+    "metadata": {
+      "agent_enabled": "true",
+      "auth_user_role": "admin",
+      "approval_granted": "true"
+    },
+    "tags": ["calculator"],
+    "expectations": {
+      "expected_final_status": "completed",
+      "required_tools": ["calculator"]
+    },
+    "allowed_tools": ["calculator"],
+    "timeout_seconds": 90,
+    "judge_rules": {
+      "required_keywords": ["72"],
+      "required_conclusions": ["72"],
+      "min_answer_chars": 2,
+      "require_no_truncation": true
+    }
+  },
+  {
+    "id": "retrieval_context",
+    "title": "Retrieval from short context",
+    "prompt": "Retrieve the previous context and state what changed.",
+    "metadata": {
+      "agent_enabled": "true",
+      "auth_user_role": "user",
+      "approval_granted": "true",
+      "model_messages_json": "[{\"role\":\"user\",\"content\":\"we discussed gateway retries\"},{\"role\":\"assistant\",\"content\":\"retry on retryable upstream failures\"}]"
+    },
+    "tags": ["retrieval"],
+    "expectations": {
+      "expected_final_status": "completed",
+      "required_tools": ["retrieval"]
+    },
+    "allowed_tools": ["retrieval"],
+    "timeout_seconds": 90,
+    "judge_rules": {
+      "required_keywords": ["retry"],
+      "min_answer_chars": 20,
+      "require_no_truncation": true
+    }
+  },
+  {
+    "id": "browser_search",
+    "title": "Browser search",
+    "prompt": "Search https://example.com and cite the source URL.",
+    "metadata": {
+      "agent_enabled": "true",
+      "auth_user_role": "user",
+      "approval_granted": "true"
+    },
+    "tags": ["browser", "search"],
+    "expectations": {
+      "expected_final_status": "completed",
+      "required_tools": ["search"]
+    },
+    "allowed_tools": ["search"],
+    "timeout_seconds": 90,
+    "judge_rules": {
+      "required_keywords": ["https://example.com"],
+      "min_answer_chars": 20,
+      "require_no_truncation": true
+    }
+  },
+  {
+    "id": "browser_summary",
+    "title": "Browser summarize page",
+    "prompt": "Visit https://example.com and summarize the page in one paragraph.",
+    "metadata": {
+      "agent_enabled": "true",
+      "auth_user_role": "user",
+      "approval_granted": "true",
+      "approved_tools": "summarize_page"
+    },
+    "tags": ["browser"],
+    "expectations": {
+      "expected_final_status": "completed",
+      "required_tools": ["summarize_page"]
+    },
+    "allowed_tools": ["summarize_page"],
+    "timeout_seconds": 90,
+    "judge_rules": {
+      "required_keywords": ["example"],
+      "min_answer_chars": 30,
+      "require_no_truncation": true
+    }
+  },
+  {
+    "id": "approval_pause_http_api",
+    "title": "High-risk approval pause",
+    "prompt": "Call external api at https://example.com/api and summarize the result.",
+    "metadata": {
+      "agent_enabled": "true",
+      "auth_user_role": "user",
+      "approval_granted": "false"
+    },
+    "tags": ["approval_pause"],
+    "expectations": {
+      "expected_final_status": "paused",
+      "expected_pause": true,
+      "required_tools": ["http_api"]
+    },
+    "allowed_tools": ["http_api"],
+    "timeout_seconds": 90,
+    "judge_rules": {
+      "allow_empty_answer": true
+    }
+  },
+  {
+    "id": "approval_resume_summary",
+    "title": "Approval resume continues execution",
+    "prompt": "Visit https://example.com and summarize the page.",
+    "metadata": {
+      "agent_enabled": "true",
+      "auth_user_role": "user",
+      "approval_granted": "false"
+    },
+    "tags": ["approval_resume", "browser"],
+    "expectations": {
+      "expected_final_status": "completed",
+      "expected_pause": true,
+      "resume_after_pause": true,
+      "required_tools": ["summarize_page"]
+    },
+    "allowed_tools": ["summarize_page"],
+    "timeout_seconds": 90,
+    "judge_rules": {
+      "required_keywords": ["example"],
+      "min_answer_chars": 30,
+      "require_no_truncation": true
+    }
+  },
+  {
+    "id": "tool_failure_replan",
+    "title": "Tool failure triggers replan",
+    "prompt": "Visit https://blocked.example.org and summarize fallback observations.",
+    "metadata": {
+      "agent_enabled": "true",
+      "auth_user_role": "user",
+      "approval_granted": "true",
+      "approved_tools": "summarize_page,retrieval"
+    },
+    "tags": ["tool_failure_replanning", "browser", "retrieval"],
+    "expectations": {
+      "expected_final_status": "completed",
+      "required_tools": ["summarize_page", "retrieval"],
+      "min_replan_count": 1,
+      "min_tool_failure_count": 1
+    },
+    "allowed_tools": ["summarize_page", "retrieval"],
+    "timeout_seconds": 90,
+    "judge_rules": {
+      "min_answer_chars": 20,
+      "require_no_truncation": true
+    }
+  },
+  {
+    "id": "long_form_generation",
+    "title": "Long-form generation",
+    "prompt": "Write a detailed report on why observability matters in agent systems. Cover latency, tool traces, governance, memory, and conclude with a practical recommendation.",
+    "metadata": {
+      "agent_enabled": "true",
+      "auth_user_role": "user",
+      "approval_granted": "true"
+    },
+    "tags": ["long_form"],
+    "expectations": {
+      "expected_final_status": "completed"
+    },
+    "allowed_tools": [],
+    "timeout_seconds": 180,
+    "judge_rules": {
+      "required_keywords": ["latency", "memory"],
+      "required_conclusions": ["recommendation"],
+      "min_answer_chars": 800,
+      "require_no_truncation": true
+    }
+  },
+  {
+    "id": "multi_step_calc_and_retrieval",
+    "title": "Multi-step calculator plus retrieval",
+    "prompt": "First calculate 12 * 7, then retrieve previous context, then summarize both results.",
+    "metadata": {
+      "agent_enabled": "true",
+      "auth_user_role": "admin",
+      "approval_granted": "true",
+      "model_messages_json": "[{\"role\":\"user\",\"content\":\"we discussed retry budgets\"},{\"role\":\"assistant\",\"content\":\"retry budgets keep upstream failures bounded\"}]"
+    },
+    "tags": ["multi_step", "calculator", "retrieval"],
+    "expectations": {
+      "expected_final_status": "completed",
+      "required_tools": ["calculator", "retrieval"]
+    },
+    "allowed_tools": ["calculator", "retrieval"],
+    "timeout_seconds": 120,
+    "judge_rules": {
+      "required_keywords": ["84"],
+      "min_answer_chars": 30,
+      "require_no_truncation": true
+    }
+  },
+  {
+    "id": "memory_recall_seeded",
+    "title": "Memory recall",
+    "prompt": "Recall gateway retries and audited upstream failures from memory, then answer in one paragraph.",
+    "metadata": {
+      "agent_enabled": "true",
+      "auth_user_role": "user",
+      "approval_granted": "true"
+    },
+    "tags": ["memory_recall", "retrieval"],
+    "expectations": {
+      "expected_final_status": "completed",
+      "required_tools": ["retrieval"],
+      "expect_memory_recall": true
+    },
+    "allowed_tools": ["retrieval"],
+    "timeout_seconds": 90,
+    "judge_rules": {
+      "required_keywords": ["retryable upstream failures"],
+      "min_answer_chars": 30,
+      "require_no_truncation": true
+    }
+  },
+  {
+    "id": "memory_write_after_answer",
+    "title": "Memory write after response",
+    "prompt": "Give a concise operating guideline for safe agent tool use.",
+    "metadata": {
+      "agent_enabled": "true",
+      "auth_user_role": "user",
+      "approval_granted": "true",
+      "memory_write_enabled": "true"
+    },
+    "tags": ["memory_write", "direct_answer"],
+    "expectations": {
+      "expected_final_status": "completed",
+      "expect_memory_write": true
+    },
+    "allowed_tools": [],
+    "timeout_seconds": 90,
+    "judge_rules": {
+      "required_keywords": ["tool"],
+      "min_answer_chars": 30,
+      "require_no_truncation": true
+    }
+  }
+]

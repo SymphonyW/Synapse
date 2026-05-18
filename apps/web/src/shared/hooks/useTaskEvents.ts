@@ -234,75 +234,93 @@ export function useTaskEvents({
     const taskID = selectedTaskID
     const cachedText = responseByTaskIDRef.current[taskID]
     const shouldReplayFromStart = typeof cachedText !== 'string' || cachedText.trim() === ''
-    const resumeFromEventID = shouldReplayFromStart ? 0 : (taskLastEventIDRef.current[taskID] ?? 0)
-    let replayedResponse: string | null = resumeFromEventID === 0 ? '' : null
-
-    eventSourceRef.current?.close()
-    queueMicrotask(() => {
-      setStreamState('connecting')
-      setLastEventID(resumeFromEventID)
-    })
-
-    const source = new EventSource(`/v1/tasks/${taskID}/events?last_event_id=${resumeFromEventID}`)
-    eventSourceRef.current = source
+    let replayedResponse: string | null = shouldReplayFromStart ? '' : null
+    let reconnectTimer: number | null = null
+    let stopped = false
     const seenEventIDs = new Set<number>()
 
-    const onEvent = (event: MessageEvent<string>) => {
-      try {
-        const payload = JSON.parse(event.data) as StreamEvent
-        const eventType = payload.type ?? event.type
+    const connect = (cursor: number) => {
+      eventSourceRef.current?.close()
+      queueMicrotask(() => {
+        setStreamState('connecting')
+        setLastEventID(cursor)
+      })
 
-        if (typeof payload.event_id === 'number') {
-          if (seenEventIDs.has(payload.event_id)) {
-            return
+      const source = new EventSource(`/v1/tasks/${taskID}/events?last_event_id=${cursor}`)
+      eventSourceRef.current = source
+
+      const onEvent = (event: MessageEvent<string>) => {
+        try {
+          const payload = JSON.parse(event.data) as StreamEvent
+          const eventType = payload.type ?? event.type
+
+          if (typeof payload.event_id === 'number') {
+            if (seenEventIDs.has(payload.event_id)) {
+              return
+            }
+            seenEventIDs.add(payload.event_id)
           }
-          seenEventIDs.add(payload.event_id)
-        }
 
-        setStreamState('live')
-        const normalizedEvent: StreamEvent = { ...payload, type: eventType }
-        setEvents((previous) => appendUniqueEvents(previous, [normalizedEvent]))
-        rememberTaskEvents(taskID, [normalizedEvent])
+          setStreamState('live')
+          const normalizedEvent: StreamEvent = { ...payload, type: eventType }
+          setEvents((previous) => appendUniqueEvents(previous, [normalizedEvent]))
+          rememberTaskEvents(taskID, [normalizedEvent])
 
-        if (eventType === 'token' && payload.token) {
-          if (replayedResponse !== null) {
-            const rebuiltResponse = replayedResponse + payload.token
-            replayedResponse = rebuiltResponse
-            setResponseByTaskID((previous) => ({ ...previous, [taskID]: rebuiltResponse }))
-          } else {
-            setResponseByTaskID((previous) => ({
-              ...previous,
-              [taskID]: `${previous[taskID] ?? ''}${payload.token}`,
-            }))
+          if (eventType === 'token' && payload.token) {
+            if (replayedResponse !== null) {
+              const rebuiltResponse = replayedResponse + payload.token
+              replayedResponse = rebuiltResponse
+              setResponseByTaskID((previous) => ({ ...previous, [taskID]: rebuiltResponse }))
+            } else {
+              setResponseByTaskID((previous) => ({
+                ...previous,
+                [taskID]: `${previous[taskID] ?? ''}${payload.token}`,
+              }))
+            }
           }
+
+          if (typeof payload.event_id === 'number') {
+            setLastEventID(payload.event_id)
+            taskLastEventIDRef.current[taskID] = payload.event_id
+          }
+
+          if (eventType === 'terminal') {
+            stopped = true
+            setStreamState('closed')
+            source.close()
+            void onTerminal?.(taskID)
+          }
+        } catch {
+          onError?.(tr('解析事件流数据失败', 'Failed to parse stream event payload'))
+        }
+      }
+
+      STREAM_EVENT_TYPES.forEach((eventType) => {
+        source.addEventListener(eventType, onEvent as EventListener)
+      })
+
+      source.onerror = () => {
+        source.close()
+        if (stopped) {
+          return
         }
 
-        if (typeof payload.event_id === 'number') {
-          setLastEventID(payload.event_id)
-          taskLastEventIDRef.current[taskID] = payload.event_id
-        }
-
-        if (eventType === 'terminal') {
-          setStreamState('closed')
-          source.close()
-          void onTerminal?.(taskID)
-        }
-      } catch {
-        onError?.(tr('解析事件流数据失败', 'Failed to parse stream event payload'))
+        setStreamState('closed')
+        const nextCursor = taskLastEventIDRef.current[taskID] ?? cursor
+        reconnectTimer = window.setTimeout(() => {
+          connect(nextCursor)
+        }, 1500)
       }
     }
 
-    STREAM_EVENT_TYPES.forEach((eventType) => {
-      source.addEventListener(eventType, onEvent as EventListener)
-    })
-
-    source.onerror = () => {
-      setStreamState('closed')
-      source.close()
-    }
+    connect(shouldReplayFromStart ? 0 : (taskLastEventIDRef.current[taskID] ?? 0))
 
     return () => {
-      source.close()
+      stopped = true
+      if (reconnectTimer !== null) {
+        window.clearTimeout(reconnectTimer)
+      }
+      eventSourceRef.current?.close()
     }
   }, [enabled, onError, onTerminal, selectedTaskID, tr])
 

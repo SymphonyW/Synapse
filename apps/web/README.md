@@ -7,6 +7,8 @@
 - React 19
 - TypeScript
 - Vite
+- Vitest
+- React Testing Library
 
 开发代理（`vite.config.ts`）：
 

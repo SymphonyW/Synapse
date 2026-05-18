@@ -33,12 +33,17 @@
 | [49-功能-向量长期记忆](49-功能-向量长期记忆.md) | 理解 file/vector 双后端、pgvector、embedding provider 和召回语义 |
 | [50-运维排障手册](50-运维排障手册.md) | 排查启动、模型、队列、SSE 和死信问题 |
 | [51-功能-真实模型Benchmark](51-功能-真实模型Benchmark.md) | 理解真实 provider 评测、配置、报告与当前限制 |
+| [52-功能-Replay对比与TraceDiff](52-功能-Replay对比与TraceDiff.md) | 理解 replay 子任务、compare API 和结构化 diff |
+| [70-demo-审批型浏览Agent](70-demo-审批型浏览Agent.md) | 10 分钟跑通审批暂停与恢复闭环 |
+| [71-demo-记忆型助手](71-demo-记忆型助手.md) | 体验长期记忆写入、召回与回答复用 |
+| [72-demo-OpenAPI工具Agent](72-demo-OpenAPI工具Agent.md) | 体验外部 API 工具的发现、治理与执行 |
 
 ## 阅读顺序
 
 | 目标 | 推荐路径 |
 |---|---|
 | 第一次启动项目 | 根 README -> 02 -> 05 |
+| 第一次演示项目 | 根 README -> 70 / 71 / 72 |
 | 理解后端架构 | 01 -> 03 -> 10 -> 12 -> 15 -> 16 |
 | 理解 AI Engine | 20 -> 45 -> 48 -> 46 -> 51 |
 | 理解数据与可靠性 | 04 -> 41 -> 43 -> 44 |

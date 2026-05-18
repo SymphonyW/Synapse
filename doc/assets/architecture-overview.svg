@@ -1,0 +1,82 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="560" viewBox="0 0 1200 560" role="img" aria-labelledby="title desc">
+  <title id="title">Synapse architecture overview</title>
+  <desc id="desc">Web Console connects to Gateway through HTTP and SSE. Gateway coordinates storage, queue and AI Engine. AI Engine calls model providers, memory and governed tools.</desc>
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#0b1020"/>
+      <stop offset="100%" stop-color="#161b2f"/>
+    </linearGradient>
+    <linearGradient id="accent" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0%" stop-color="#7dd3fc"/>
+      <stop offset="100%" stop-color="#a78bfa"/>
+    </linearGradient>
+    <style>
+      .label { fill: #eef2ff; font-family: "Segoe UI", Arial, sans-serif; font-size: 20px; font-weight: 600; }
+      .small { fill: #cbd5e1; font-family: "Segoe UI", Arial, sans-serif; font-size: 15px; }
+      .box { fill: rgba(15, 23, 42, 0.9); stroke: #475569; stroke-width: 2; rx: 18; }
+      .focus { fill: rgba(30, 41, 59, 0.98); stroke: url(#accent); stroke-width: 3; rx: 20; }
+      .line { stroke: #94a3b8; stroke-width: 3; fill: none; marker-end: url(#arrow); }
+      .dash { stroke-dasharray: 10 8; }
+    </style>
+    <marker id="arrow" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto">
+      <path d="M0,0 L10,5 L0,10 z" fill="#94a3b8"/>
+    </marker>
+  </defs>
+  <rect width="1200" height="560" fill="url(#bg)"/>
+  <text x="48" y="52" class="label" font-size="28">Synapse：可观测、可治理、可恢复的 Agent Runtime</text>
+  <text x="48" y="82" class="small">控制面负责状态、审批与事件；执行面负责模型、工具与记忆。</text>
+
+  <rect x="48" y="150" width="210" height="120" class="focus"/>
+  <text x="84" y="196" class="label">Web Console</text>
+  <text x="84" y="226" class="small">Chat / Trace / Memory</text>
+  <text x="84" y="250" class="small">Approval / Ops</text>
+
+  <rect x="352" y="120" width="252" height="180" class="focus"/>
+  <text x="402" y="168" class="label">Gateway</text>
+  <text x="386" y="198" class="small">HTTP API · Auth · Worker</text>
+  <text x="386" y="222" class="small">Task lifecycle · SSE</text>
+  <text x="386" y="246" class="small">Replay · Dead letters</text>
+
+  <rect x="704" y="120" width="252" height="180" class="focus"/>
+  <text x="764" y="168" class="label">AI Engine</text>
+  <text x="742" y="198" class="small">Agent loop · Providers</text>
+  <text x="742" y="222" class="small">Tool policy · Approval</text>
+  <text x="742" y="246" class="small">Memory · Regression</text>
+
+  <rect x="1000" y="96" width="152" height="82" class="box"/>
+  <text x="1036" y="130" class="label">Model</text>
+  <text x="1020" y="154" class="small">Mock / Real</text>
+
+  <rect x="1000" y="202" width="152" height="82" class="box"/>
+  <text x="1036" y="236" class="label">Tools</text>
+  <text x="1014" y="260" class="small">Builtin / OpenAPI / MCP</text>
+
+  <rect x="1000" y="308" width="152" height="82" class="box"/>
+  <text x="1030" y="342" class="label">Memory</text>
+  <text x="1018" y="366" class="small">File / Vector</text>
+
+  <rect x="352" y="372" width="252" height="96" class="box"/>
+  <text x="420" y="410" class="label">PostgreSQL</text>
+  <text x="406" y="438" class="small">Tasks · Events · Policy</text>
+
+  <rect x="704" y="372" width="252" height="96" class="box"/>
+  <text x="784" y="410" class="label">Redis</text>
+  <text x="770" y="438" class="small">Task Queue</text>
+
+  <path d="M258 184 H352" class="line"/>
+  <text x="274" y="170" class="small">HTTP JSON</text>
+  <path d="M352 228 H258" class="line dash"/>
+  <text x="274" y="252" class="small">SSE events</text>
+
+  <path d="M604 210 H704" class="line"/>
+  <text x="628" y="196" class="small">gRPC stream</text>
+
+  <path d="M956 138 H1000" class="line"/>
+  <path d="M956 226 H1000" class="line"/>
+  <path d="M956 338 H1000" class="line"/>
+
+  <path d="M478 300 V372" class="line"/>
+  <path d="M830 300 V372" class="line"/>
+
+  <text x="48" y="526" class="small">任务先被保存，再被执行；事件先被持久化，再被 SSE 推给浏览器。</text>
+</svg>

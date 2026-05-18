@@ -1,0 +1,23 @@
+{
+  "name": "synapse",
+  "version": "1.0.0",
+  "description": "> 一个可观测、可治理、可恢复的 Agent 运行平台。",
+  "main": "index.js",
+  "directories": {
+    "doc": "doc"
+  },
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/SymphonyW/Synapse.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "bugs": {
+    "url": "https://github.com/SymphonyW/Synapse/issues"
+  },
+  "homepage": "https://github.com/SymphonyW/Synapse#readme"
+}

@@ -1,16 +1,70 @@
 # Synapse
 
-Synapse 是一个面向 Agent 任务执行场景的全栈工程，提供 Web 控制台、Go Gateway、Python AI Engine、任务队列、流式事件、审批恢复、长期记忆和基础运维能力。
+> 一个可观测、可治理、可恢复的 Agent 运行平台。
 
-## 项目简介
+Synapse 把任务编排、工具调用、审批暂停与恢复、长期记忆和回归评测收束到同一套控制面与执行面里。它不是“聊两句就结束”的聊天 Demo，也不是只能跑一次的脚本；它更像一个面向真实 Agent 工作流的控制层：任务会异步运行，事件会被保存，风险动作可以被暂停并恢复，开发者还能在 Web 中追踪、重放和评测它。
 
-Synapse 的目标是把 Agent 任务从提交到执行、从模型输出到前端展示、从失败处理到人工审批串成一条可以本地运行和调试的工程链路。它不是单纯的模型调用示例，而是围绕“任务生命周期”组织后端、前端、协议、存储和运维接口。
+| 30 秒先看这 5 件事 | 为什么值得看 |
+|---|---|
+| 异步任务生命周期 | `queued / running / paused / completed / failed / canceled` 全链路可追踪 |
+| 工具治理 | 角色授权、禁用、审批、审计统一收口，不让外部工具绕过边界 |
+| 审批暂停与恢复 | 高风险调用先停住，再按精确工具调用恢复，而不是粗暴放行 |
+| 长期记忆 | 既能本地零依赖运行，也能切到向量记忆做语义召回 |
+| Trace + Regression | 既能看清一次任务怎么走，也能持续验证 Runtime 没退化 |
 
-项目当前由三个主要运行时组成：`apps/web` 提供 React 控制台，`services/gateway-go` 提供 HTTP API、认证、任务编排、SSE 和 Worker，`services/ai-engine-py` 提供 gRPC Runtime、OpenAI-compatible 模型访问、Agent loop、工具治理和长期记忆。
+[5 分钟跑起来](#5-分钟跑起来) · [10 分钟看完整 Workflow](#10-分钟看完整-workflow) · [技术文档](doc/README.md) · [贡献指南](CONTRIBUTING.md)
 
-默认配置使用 `mock` 模型 provider，新开发者不需要 API Key 就能跑通任务创建、异步执行、SSE 流式输出和基础管理流程。需要接入真实模型时，可以通过 OpenAI-compatible 配置切换 OpenAI、Gemini 或智谱等提供方。
+![Synapse 总体架构图](doc/assets/architecture-overview.svg)
 
-当前仓库没有 k8s、Nginx、Swagger/OpenAPI、Apifox 或 Postman Collection。生产部署方式和正式接口文档生成方式为待确认。
+```mermaid
+flowchart LR
+    A[提交任务] --> B[持久化 + 入队]
+    B --> C[Agent Runtime]
+    C --> D{需要高风险工具?}
+    D -->|否| E[流式返回 token]
+    D -->|是| F[paused + 等待审批]
+    F --> G[approve + resume]
+    G --> C
+    E --> H[SSE + Trace + Replay]
+```
+
+## 为什么不是普通 Agent Demo
+
+| 普通 Demo 常见做法 | Synapse 的做法 |
+|---|---|
+| 一次请求、一次回答 | 任务异步执行，而且可以暂停、恢复、取消、重放 |
+| 只看最终输出 | 事件先持久化，再通过 SSE 增量推送 |
+| 高风险动作靠 prompt 约束 | 有工具策略、角色白名单、审批恢复和审计 |
+| 失败就结束 | 有重试、死信和 replay |
+| 每次都像第一次见面 | 有长期记忆和 recall |
+| 手工冒烟测试 | 有 mock regression 和真实模型 benchmark |
+
+## 10 分钟看完整 Workflow
+
+| Demo | 你会看到什么 |
+|---|---|
+| [审批型浏览 Agent](doc/70-demo-审批型浏览Agent.md) | `approval_required -> paused -> approve -> resume` 的完整治理闭环 |
+| [记忆型助手](doc/71-demo-记忆型助手.md) | 写入、召回、retrieval、回答复用同一条长期记忆链路 |
+| [OpenAPI 工具 Agent](doc/72-demo-OpenAPI工具Agent.md) | 外部 API 如何被发现、治理、审批并执行 |
+
+## 界面预览
+
+当前仓库先提供规范化资产位，方便后续直接替换真实截图而不改 README 链接。
+
+| Web 控制台 | Agent Trace 工作台 |
+|---|---|
+| <img src="doc/assets/web-console.png" alt="Web 控制台示例" width="420" /> | <img src="doc/assets/trace-workbench.png" alt="Agent Trace 工作台示例" width="420" /> |
+
+| 审批暂停 | 记忆管理页 |
+|---|---|
+| <img src="doc/assets/approval-pause.png" alt="审批暂停示例" width="420" /> | <img src="doc/assets/memory-page.png" alt="记忆管理页示例" width="420" /> |
+
+## 适合谁
+
+- 想研究 Agent runtime，而不是只看聊天壳子的开发者；
+- 想学习任务编排、SSE、审批恢复的后端开发者；
+- 想做企业内部 Agent 控制层的人；
+- 想基于 MCP / OpenAPI 扩展工具的人。
 
 ## 核心功能
 
@@ -329,49 +383,30 @@ docker compose --env-file docker-compose.vector.env up --build -d
 
 默认 Compose 仍使用 `file` backend；Postgres 镜像已切到自带 pgvector 扩展的版本，因此 mock 模式与 vector 模式都能直接拉起。
 
-## 快速启动
+## 5 分钟跑起来
 
-### 方式 A：Mock 模式启动后端依赖
+### 1. 先用 Mock 模式跑通全链路
 
-该方式启动 `gateway`、`ai-engine`、`postgres`、`redis` 和生产模式 `web` 服务。
+这条路径最短，不需要 API Key，并且会一次拉起 `gateway`、`ai-engine`、`postgres`、`redis` 和生产模式 `web`：
 
 ```powershell
 .\scripts\dev.ps1 -Task up
-```
-
-或：
-
-```powershell
+# 或
 docker compose up --build -d
 ```
 
-如果要改用本地 Vite 开发模式，可单独启动 Web：
-
-```powershell
-cd apps/web
-npm install
-npm run dev
-```
-
-访问：
+打开：
 
 | 服务 | 地址 |
 |---|---|
 | Web | http://127.0.0.1:5173 |
 | Gateway API | http://127.0.0.1:8080 |
-| AI Engine gRPC | 127.0.0.1:50051 |
-| Postgres | 127.0.0.1:15432 |
-| Redis | 127.0.0.1:6379 |
 
-停止：
+登录默认管理员 `admin / 123456`，即可直接开始跑任务、看 SSE、切 Trace、做审批恢复。
 
-```powershell
-.\scripts\dev.ps1 -Task down
-```
+### 2. 再切真实模型
 
-### 方式 B：真实模型 provider
-
-OpenAI：
+Mock 看懂链路后，再接真实 provider：
 
 ```powershell
 Copy-Item docker-compose.openai.env.example docker-compose.openai.env
@@ -379,91 +414,53 @@ Copy-Item docker-compose.openai.env.example docker-compose.openai.env
 .\scripts\dev.ps1 -Task up-openai
 ```
 
-Gemini：
+Gemini、智谱也有对应模板：
 
 ```powershell
 Copy-Item docker-compose.gemini.env.example docker-compose.gemini.env
-# 编辑 docker-compose.gemini.env，填写 API Key
 .\scripts\dev.ps1 -Task up-gemini
-```
 
-智谱：
-
-```powershell
 Copy-Item docker-compose.zhipu.env.example docker-compose.zhipu.env
-# 编辑 docker-compose.zhipu.env，填写 API Key
 .\scripts\dev.ps1 -Task up-zhipu
 ```
 
-长文本回复说明：
-
-1. `openai` 兼容通道会识别详细讲解、完整报告、长文等长文本需求，并自动启用续写协议。
-2. Runtime 会隐藏内部完成标记，按 `SYNAPSE_OPENAI_LONG_FORM_MIN_CHARS` 和回答完整性判断是否继续。
-3. 如果 provider 返回 `length`、`max_tokens`、流式中断，或长文本输出已有内容但被供应商标记为 `sensitive` / `content_filter`，Runtime 会在 `SYNAPSE_OPENAI_CONTINUATION_MAX_ROUNDS` 范围内继续补全。
-4. Compose 默认把 Gateway 执行超时和 HTTP 写超时调到 `300s`，用于承载更长的 SSE 输出。
-
-镜像源组合：
+如果你想在容器里直接使用前端开发模式：
 
 ```powershell
-Copy-Item docker-compose.mirror.env.example docker-compose.mirror.env
-.\scripts\dev.ps1 -Task up-zhipu-mirror
+docker compose --profile web-dev up --build web-dev
 ```
 
-更多脚本任务见 [scripts/dev.ps1](scripts/dev.ps1)，包括 `up-mirror`、`up-openai-mirror`、`up-gemini-mirror`、`verify-agent-mode`。
-
-### 方式 C：本地分组件启动
-
-安装前端依赖：
+### 3. 需要本地联调时，再分组件启动
 
 ```powershell
 cd apps/web
 npm install
 cd ..\..
-```
 
-安装 Python 依赖：
-
-```powershell
 python -m venv .venv
 .\.venv\Scripts\Activate.ps1
 python -m pip install -U pip
 python -m pip install -r services/ai-engine-py/requirements.txt
-```
 
-拉起 Postgres/Redis：
-
-```powershell
 docker compose up -d postgres redis
-```
 
-设置本地 Gateway 环境变量：
-
-```powershell
 $env:SYNAPSE_DATABASE_URL = "postgres://synapse:synapse@127.0.0.1:15432/synapse?sslmode=disable"
 $env:SYNAPSE_REDIS_ADDR = "127.0.0.1:6379"
 $env:SYNAPSE_AI_ENGINE_ADDR = "127.0.0.1:50051"
-```
 
-如修改过 proto，先生成代码：
-
-```powershell
-.\scripts\dev.ps1 -Task proto
-```
-
-分别启动三个终端：
-
-```powershell
-# 终端 A
+# 三个终端分别执行
 .\scripts\dev.ps1 -Task ai
-
-# 终端 B
 .\scripts\dev.ps1 -Task gateway
-
-# 终端 C
 .\scripts\dev.ps1 -Task web
 ```
 
-如果不启动 Postgres/Redis，Gateway 会回退内存存储和内存队列，但重启后数据丢失。
+停止整套服务：
+
+```powershell
+.\scripts\dev.ps1 -Task down
+```
+
+更完整的部署说明见 [doc/02-部署与启动.md](doc/02-部署与启动.md)。
 
 ## 验证运行成功
 
@@ -722,18 +719,19 @@ docker compose up --build -d
 | Agent regression | 用稳定 mock case 做工具、审批、记忆和失败恢复门禁 |
 | Live benchmark | 用真实 provider 对照同一套 Agent Runtime，输出 provider / case / tag 三级报告 |
 
-## 后续扩展
+## Roadmap
 
-| 方向 | 建议 |
-|---|---|
-| 数据库 | 引入 goose/migrate 等 migration 工具，替代启动自动建表 |
-| 队列 | 从 Redis List 升级到支持 ack/reclaim 的消息系统 |
-| 安全 | 开启 HTTPS、Cookie Secure、CSRF、防爆破、密钥管理 |
-| 接口文档 | 从 router/handler 生成 OpenAPI，并提供 Postman/Apifox 集合 |
-| Web 工程质量 | 在现有 Vitest/RTL 基础上继续补充更细粒度组件测试与 E2E |
-| 可观测性 | 接入结构化日志、metrics、trace 和任务级 dashboard |
-| 工具生态 | 扩展 OpenAPI 复杂参数序列化、MCP HTTP/SSE transport 和权限配置 UI |
-| 模型治理 | 增加 provider 路由、fallback、熔断、限流和成本统计 |
+| 方向 | 状态 | 说明 |
+|---|---|---|
+| MCP transport | 部分完成 | 已支持 stdio；HTTP/SSE transport 待扩展 |
+| OpenAPI executor | 已完成 | 已支持受控 HTTP 执行、allowlist、鉴权、超时和响应限制 |
+| Trace workbench | 已完成 | 已有结构化 Trace、导出和 Replay Diff |
+| policy center | 已完成 | 已有管理员策略页、热更新和持久化策略 |
+| vector memory | 已完成 | 已支持 `file` / `vector` 双后端与 pgvector 召回 |
+| benchmark | 已完成 | 已有 mock regression 与真实 provider benchmark |
+| replay diff | 已完成 | 已支持 replay 子任务与结构化 diff |
+
+下一批更像“生产化底座”而不是功能补洞：数据库 migration、可靠队列、HTTPS/CSRF/密钥管理、OpenAPI 复杂参数、MCP 远程 transport，以及更完整的可观测性。
 
 ## 文档索引
 
@@ -750,6 +748,10 @@ docker compose up --build -d
 9. [工具策略管理中心](doc/48-功能-工具策略管理中心.md)
 10. [Agent Trace 工作台](doc/47-功能-Agent-Trace工作台.md)
 11. [真实模型 Benchmark](doc/51-功能-真实模型Benchmark.md)
+12. [Replay 对比与 Trace Diff](doc/52-功能-Replay对比与TraceDiff.md)
+13. [审批型浏览 Agent Demo](doc/70-demo-审批型浏览Agent.md)
+14. [记忆型助手 Demo](doc/71-demo-记忆型助手.md)
+15. [OpenAPI 工具 Agent Demo](doc/72-demo-OpenAPI工具Agent.md)
 
 
 ## Replay 对比与 Trace Diff

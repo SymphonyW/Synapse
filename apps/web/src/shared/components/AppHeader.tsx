@@ -1,5 +1,4 @@
 import type { HealthResponse, Language, SessionIdentity, ViewMode } from '../types/domain'
-import { statusClass } from '../utils/format'
 
 type Translate = (zh: string, en: string) => string
 
@@ -25,6 +24,17 @@ function healthStatusLabel(status: string | undefined, tr: Translate): string {
   }
 }
 
+function healthToneClass(status: string | undefined): string {
+  switch (status) {
+    case 'ok':
+      return 'health-pill health-pill-ok'
+    case 'degraded':
+      return 'health-pill health-pill-warning'
+    default:
+      return 'health-pill health-pill-unknown'
+  }
+}
+
 export function AppHeader({
   currentUser,
   health,
@@ -36,22 +46,26 @@ export function AppHeader({
   tr,
 }: AppHeaderProps) {
   const isAdmin = currentUser.role === 'admin'
-  const titles: Record<ViewMode, { eyebrow: string; heading: string }> = {
+  const titles: Record<ViewMode, { eyebrow: string; heading: string; description: string }> = {
     client: {
       eyebrow: tr('Synapse 用户端', 'Synapse Client'),
       heading: tr('任务客户端', 'Task Client'),
+      description: tr('更清晰的 Agent 任务协作工作台', 'A clearer workspace for agent task collaboration.'),
     },
     memory: {
       eyebrow: tr('Synapse 记忆', 'Synapse Memory'),
       heading: tr('长期记忆管理', 'Long-term Memory'),
+      description: tr('管理、回想并调用系统记忆', 'Manage, recall, and inspect long-term memory.'),
     },
     ops: {
       eyebrow: tr('Synapse 管理中心', 'Synapse Admin'),
       heading: tr('任务运维台', 'Task Operations'),
+      description: tr('运营任务、异常和执行状态', 'Operate tasks, failures, and execution state.'),
     },
     policy: {
       eyebrow: tr('Synapse 管理中心', 'Synapse Admin'),
       heading: tr('工具策略', 'Tool Policy'),
+      description: tr('查看并维护工具调用策略', 'Review and maintain tool access policy.'),
     },
   }
 
@@ -59,9 +73,10 @@ export function AppHeader({
 
   return (
     <header className="topbar">
-      <div>
+      <div className="topbar-copy">
         <p className="eyebrow">{title.eyebrow}</p>
         <h1>{title.heading}</h1>
+        <p className="topbar-description">{title.description}</p>
       </div>
       <div className="topbar-actions">
         <div className="account-pill">
@@ -114,10 +129,15 @@ export function AppHeader({
 
         <div className="health-card">
           <p>{tr('网关健康状态', 'Gateway Health')}</p>
-          <strong className={statusClass(health?.status)}>
-            {healthStatusLabel(health?.status, tr)}
-          </strong>
-          <span>{health?.model_provider ?? health?.error ?? tr('暂无提供方信息', 'No provider data')}</span>
+          <div className="health-card-row">
+            <strong className={healthToneClass(health?.status)}>
+              <span aria-hidden="true" />
+              {healthStatusLabel(health?.status, tr)}
+            </strong>
+            <span className="health-provider">
+              {health?.model_provider ?? health?.error ?? tr('暂无提供方信息', 'No provider data')}
+            </span>
+          </div>
         </div>
       </div>
     </header>

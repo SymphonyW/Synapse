@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import type { FormEvent } from 'react'
+import type { FormEvent, KeyboardEvent } from 'react'
 import type { Language, SessionIdentity, Task } from '../../shared/types/domain'
 import {
   CLIENT_CONVERSATION_ID_KEY,
@@ -15,6 +15,7 @@ import { deleteConversation } from './api'
 import { AgentTimeline } from './agentTimeline'
 import { assistantTextForTask } from './agentTimelineModel'
 import { ChatMarkdown } from './ChatMarkdown'
+import { shouldSubmitComposerOnKeyDown } from './composer'
 
 type Translate = (zh: string, en: string) => string
 
@@ -72,6 +73,7 @@ export function ClientChatPanel({ currentUser, language, tr }: ClientChatPanelPr
   const clientTranscriptRef = useRef<HTMLDivElement | null>(null)
   const transcriptPinnedToBottomRef = useRef(true)
   const lastTranscriptConversationIDRef = useRef('')
+  const promptCompositionRef = useRef(false)
 
   const myTasks = useMemo(
     () => tasks.tasks.filter((task) => task.user_id === currentUser.username),
@@ -179,6 +181,7 @@ export function ClientChatPanel({ currentUser, language, tr }: ClientChatPanelPr
       }),
     [selectedConversationTasks, taskEvents.responseByTaskID, tr],
   )
+  const composerDisabled = tasks.submitting || prompt.trim().length === 0
 
   useEffect(() => {
     if (selectedConversationID === NEW_CONVERSATION_DRAFT_ID) {
@@ -295,6 +298,9 @@ export function ClientChatPanel({ currentUser, language, tr }: ClientChatPanelPr
 
   const handleCreateTask = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault()
+    if (tasks.submitting) {
+      return
+    }
     const messageInput = prompt.trim()
     if (!messageInput) {
       tasks.setRequestError(tr('prompt 不能为空', 'prompt is required'))
@@ -337,6 +343,26 @@ export function ClientChatPanel({ currentUser, language, tr }: ClientChatPanelPr
     transcriptPinnedToBottomRef.current = true
     setSelectedConversationID(nextConversationID)
     setPrompt('')
+  }
+
+  const handlePromptKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
+    const isComposing = promptCompositionRef.current || event.nativeEvent.isComposing
+    const shouldSubmit = shouldSubmitComposerOnKeyDown({
+      key: event.key,
+      shiftKey: event.shiftKey,
+      isComposing,
+      disabled: composerDisabled,
+      value: prompt,
+    })
+
+    if (!shouldSubmit) {
+      return
+    }
+
+    // Plain Enter submits; Shift + Enter keeps the native newline behavior.
+    // IME composition is excluded above so Enter can still confirm Chinese candidates safely.
+    event.preventDefault()
+    event.currentTarget.form?.requestSubmit()
   }
 
   return (
@@ -414,7 +440,7 @@ export function ClientChatPanel({ currentUser, language, tr }: ClientChatPanelPr
                   : tr('输入消息并发送，系统会创建新会话。', 'Type a message and send to create a new chat thread.')}
               </p>
             </div>
-            <span className={`stream-${taskEvents.streamState}`}>
+            <span className={`conversation-stream-state stream-${taskEvents.streamState}`}>
               {streamStateLabel(taskEvents.streamState, tr)} · #{taskEvents.lastEventID}
             </span>
           </div>
@@ -509,7 +535,14 @@ export function ClientChatPanel({ currentUser, language, tr }: ClientChatPanelPr
             )}
             <textarea
               value={prompt}
+              onCompositionEnd={() => {
+                promptCompositionRef.current = false
+              }}
+              onCompositionStart={() => {
+                promptCompositionRef.current = true
+              }}
               onChange={(event) => setPrompt(event.target.value)}
+              onKeyDown={handlePromptKeyDown}
               rows={4}
               placeholder={tr('在这个会话里继续提问...', 'Continue chatting in this thread...')}
             />
@@ -519,7 +552,7 @@ export function ClientChatPanel({ currentUser, language, tr }: ClientChatPanelPr
                   ? tr('将创建新会话', 'Will create a new chat')
                   : tr('将继续当前会话', 'Will continue current chat')}
               </span>
-              <button disabled={tasks.submitting} type="submit">
+              <button disabled={composerDisabled} type="submit">
                 {tasks.submitting ? tr('发送中...', 'Sending...') : tr('发送', 'Send')}
               </button>
             </div>

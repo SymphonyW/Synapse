@@ -4,6 +4,34 @@
   font-family: 'Space Grotesk', sans-serif;
   font-size: 16px;
   line-height: 1.45;
+  --bg-canvas: #f3f5fb;
+  --bg-canvas-soft: #fbfbfe;
+  --bg-canvas-warm: #f7f5ff;
+  --surface: rgba(255, 255, 255, 0.86);
+  --surface-strong: #ffffff;
+  --surface-muted: #f7f8fc;
+  --surface-tint: #f0f3ff;
+  --text-primary: #172033;
+  --text-secondary: #59657b;
+  --text-muted: #7d879a;
+  --border-soft: #dde3f0;
+  --border-strong: #cbd5e6;
+  --primary: #4f46e5;
+  --primary-bright: #6366f1;
+  --primary-ink: #4338ca;
+  --primary-soft: rgba(79, 70, 229, 0.12);
+  --accent: #4f46e5;
+  --accent-bright: #6366f1;
+  --success: #0f9f6e;
+  --warning: #d97706;
+  --danger: #dc2626;
+  --shadow-sm: 0 10px 24px -20px rgba(16, 42, 67, 0.45);
+  --shadow-md: 0 18px 38px -28px rgba(16, 42, 67, 0.58);
+  --shadow-lg: 0 24px 50px -34px rgba(16, 42, 67, 0.68);
+  --radius-sm: 12px;
+  --radius-md: 16px;
+  --radius-lg: 22px;
+  --transition-fast: 150ms ease;
   font-synthesis: none;
   text-rendering: optimizeLegibility;
   -webkit-font-smoothing: antialiased;
@@ -17,11 +45,11 @@
 body {
   margin: 0;
   min-height: 100vh;
-  color: #16324f;
+  color: var(--text-primary);
   background:
-    radial-gradient(circle at 12% -8%, rgba(249, 115, 22, 0.2), transparent 40%),
-    radial-gradient(circle at 80% 0%, rgba(20, 184, 166, 0.22), transparent 35%),
-    linear-gradient(180deg, #f7fbff, #eaf4ff 58%, #f5fbff);
+    radial-gradient(circle at 12% -8%, rgba(99, 102, 241, 0.14), transparent 40%),
+    radial-gradient(circle at 80% 0%, rgba(56, 189, 248, 0.12), transparent 35%),
+    linear-gradient(180deg, var(--bg-canvas-soft), var(--bg-canvas) 58%, #f7f8fc);
 }
 
 #root {

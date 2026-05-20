@@ -150,6 +150,44 @@ func TestDeleteConversationNotFound(t *testing.T) {
 	}
 }
 
+func TestResolveAssistantMessageUsesLatestAttemptAfterRetry(t *testing.T) {
+	taskStore := store.NewInMemory()
+	now := time.Now().UTC()
+	mustCreateTaskWithConversation(t, taskStore, domain.Task{
+		ID:        "task-retry-answer",
+		UserID:    "alice",
+		Prompt:    "call api",
+		Status:    domain.TaskCompleted,
+		Metadata:  map[string]string{"conversation_id": "conv-retry", "client_view": "chat"},
+		CreatedAt: now,
+		UpdatedAt: now,
+	})
+
+	if _, err := taskStore.AppendEvent("task-retry-answer", domain.TaskEvent{Type: "token", Token: "old expanded failure. "}); err != nil {
+		t.Fatalf("AppendEvent returned error: %v", err)
+	}
+	if _, err := taskStore.AppendEvent("task-retry-answer", domain.TaskEvent{Type: "info", Message: "retry_attempt"}); err != nil {
+		t.Fatalf("AppendEvent returned error: %v", err)
+	}
+	if _, err := taskStore.AppendEvent("task-retry-answer", domain.TaskEvent{Type: "token", Token: "fresh concise failure."}); err != nil {
+		t.Fatalf("AppendEvent returned error: %v", err)
+	}
+
+	handler := NewHandler(taskStore, noopAgentClient{}, queue.NewInMemoryQueue(8), &recordingTaskCanceler{})
+	task, ok := taskStore.Get("task-retry-answer")
+	if !ok {
+		t.Fatal("task not found")
+	}
+	answer, err := handler.resolveAssistantMessage(task)
+	if err != nil {
+		t.Fatalf("resolveAssistantMessage returned error: %v", err)
+	}
+
+	if answer != "fresh concise failure." {
+		t.Fatalf("unexpected assistant message: got %q", answer)
+	}
+}
+
 func mustCreateTaskWithConversation(t *testing.T, taskStore *store.InMemoryStore, task domain.Task) {
 	t.Helper()
 

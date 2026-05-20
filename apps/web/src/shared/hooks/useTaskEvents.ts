@@ -20,6 +20,10 @@ function readTerminalStatus(value: unknown): TerminalTaskStatus | undefined {
     : undefined
 }
 
+function isRetryAttemptEvent(eventType: string, payload: StreamEvent): boolean {
+  return eventType === 'info' && (payload.message ?? '').trim() === 'retry_attempt'
+}
+
 export function useTaskEvents({
   enabled,
   selectedTaskID,
@@ -202,6 +206,10 @@ export function useTaskEvents({
 
           hydratedEvents = appendUniqueEvents(hydratedEvents, [{ ...payload, type: eventType }])
 
+          if (isRetryAttemptEvent(eventType, payload)) {
+            responseText = ''
+          }
+
           if (eventType === 'token' && payload.token) {
             responseText += payload.token
           }
@@ -271,6 +279,11 @@ export function useTaskEvents({
           const normalizedEvent: StreamEvent = { ...payload, type: eventType }
           setEvents((previous) => appendUniqueEvents(previous, [normalizedEvent]))
           rememberTaskEvents(taskID, [normalizedEvent])
+
+          if (isRetryAttemptEvent(eventType, payload)) {
+            replayedResponse = replayedResponse === null ? null : ''
+            setResponseByTaskID((previous) => ({ ...previous, [taskID]: '' }))
+          }
 
           if (eventType === 'token' && payload.token) {
             if (replayedResponse !== null) {

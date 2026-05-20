@@ -1,5 +1,6 @@
 import asyncio
 import ast
+import hashlib
 import html
 import json
 import re
@@ -155,6 +156,7 @@ class ToolExecutionOutcome:
     result: ToolResult | None = None
     duration_ms: int = 0
     reason: str = ""
+    tool_call_id: str = ""
     completed: bool = False
     blocked: bool = False
     tool_called: bool = False
@@ -469,6 +471,8 @@ class AgentRuntime:
         blocked_actions = 0
         step_summaries: list[str] = []
         successful_tool_observations: list[tuple[str, str]] = []
+        terminal_tool_failures: list[tuple[PlannerDecision, ToolExecutionOutcome]] = []
+        consumed_tool_error_keys: set[str] = set()
         replan_used = False
 
         def record_outcome(outcome: ToolExecutionOutcome) -> None:
@@ -481,6 +485,21 @@ class AgentRuntime:
                 tool_call_count += 1
             if outcome.tool_succeeded:
                 tool_success_count += 1
+
+        def consume_terminal_tool_failure(
+            decision: PlannerDecision,
+            outcome: ToolExecutionOutcome,
+        ) -> bool:
+            if not self._is_terminal_tool_failure(decision, outcome):
+                return False
+
+            key = self._tool_error_consumption_key(decision, outcome)
+            if key in consumed_tool_error_keys:
+                return True
+
+            consumed_tool_error_keys.add(key)
+            terminal_tool_failures.append((decision, outcome))
+            return True
 
         if resume_step_index > 1:
             yield RuntimeStreamItem(
@@ -565,6 +584,9 @@ class AgentRuntime:
                 ),
             )
 
+            if consume_terminal_tool_failure(decision, outcome):
+                break
+
             replan = self._replanner_after_failure(
                 step=step,
                 failed_decision=decision,
@@ -647,6 +669,9 @@ class AgentRuntime:
                 ),
             )
 
+            if consume_terminal_tool_failure(replan.decision, replan_outcome):
+                break
+
         evaluation = self._evaluate_task(
             total_steps=len(plan_steps),
             completed_steps=completed_steps,
@@ -658,7 +683,15 @@ class AgentRuntime:
         final_response_chunks: list[str] = []
         synthesis_error = ""
         use_direct_generation = tool_call_count == 0 and blocked_actions == 0
-        if self.model_provider == "mock":
+        if terminal_tool_failures:
+            failure_answer = self._build_tool_failure_final_response(
+                prompt=normalized_prompt,
+                failures=terminal_tool_failures,
+            )
+            for chunk in self._chunk_text(failure_answer):
+                final_response_chunks.append(chunk)
+                yield RuntimeStreamItem(kind="token", token=chunk)
+        elif self.model_provider == "mock":
             mock_answer = self._build_mock_user_facing_answer(
                 prompt=normalized_prompt,
                 step_summaries=step_summaries,
@@ -948,6 +981,7 @@ class AgentRuntime:
         objective: str,
         tool_name: str,
         tool_input: str,
+        tool_call_id: str = "",
         reason: str = "",
         result: ToolResult | None = None,
         duration_ms: int | None = None,
@@ -962,11 +996,14 @@ class AgentRuntime:
             "tool": tool_name,
             "tool_input": tool_input,
             "tool_call": {
+                "call_id": tool_call_id,
                 "tool_name": tool_name,
                 "input_text": tool_input,
                 "arguments": self._build_tool_call_arguments(tool_name, tool_input),
             },
         }
+        if tool_call_id:
+            payload["tool_call_id"] = tool_call_id
 
         if tool is not None:
             payload["tool_provider"] = self._tool_registry.provider_for(tool_name)
@@ -1136,6 +1173,8 @@ class AgentRuntime:
             )
             return
 
+        tool_call_id = self._build_tool_call_id(task_id, decision)
+
         if not self._is_tool_allowed_for_role(decision.tool_name, user_role):
             observation = f"tool {decision.tool_name} is blocked for role {user_role}"
             self._tool_audit.log(
@@ -1155,6 +1194,7 @@ class AgentRuntime:
                 status="skipped",
                 observation=observation,
                 reason="policy_blocked",
+                tool_call_id=tool_call_id,
                 blocked=True,
             )
             outcome_box["outcome"] = outcome
@@ -1178,6 +1218,7 @@ class AgentRuntime:
                         objective=decision.objective,
                         tool_name=decision.tool_name,
                         tool_input=decision.tool_input,
+                        tool_call_id=tool_call_id,
                         reason=outcome.reason,
                         extra={"role": user_role},
                     ),
@@ -1218,6 +1259,7 @@ class AgentRuntime:
                 status="approval_required",
                 observation=observation,
                 reason="approval_required",
+                tool_call_id=tool_call_id,
                 blocked=True,
                 should_pause=True,
             )
@@ -1240,6 +1282,7 @@ class AgentRuntime:
                     objective=decision.objective,
                     tool_name=decision.tool_name,
                     tool_input=decision.tool_input,
+                    tool_call_id=tool_call_id,
                     reason=outcome.reason,
                 )
             )
@@ -1292,6 +1335,7 @@ class AgentRuntime:
                     objective=decision.objective,
                     tool_name=decision.tool_name,
                     tool_input=decision.tool_input,
+                    tool_call_id=tool_call_id,
                 ),
                 display_message=f"Tool started: {decision.tool_name}",
             ),
@@ -1309,6 +1353,7 @@ class AgentRuntime:
                 prompt,
                 metadata,
                 recalled_memories,
+                tool_call_id,
             )
         except Exception as exc:
             result = ToolResult.failure(
@@ -1323,6 +1368,7 @@ class AgentRuntime:
             observation=result.output,
             result=result,
             duration_ms=tool_duration_ms,
+            tool_call_id=tool_call_id,
             completed=result.ok,
             tool_called=True,
             tool_succeeded=result.ok,
@@ -1340,6 +1386,7 @@ class AgentRuntime:
                     objective=decision.objective,
                     tool_name=decision.tool_name,
                     tool_input=decision.tool_input,
+                    tool_call_id=tool_call_id,
                     result=result,
                     duration_ms=tool_duration_ms,
                 ),
@@ -1436,6 +1483,116 @@ class AgentRuntime:
                 reason="continue_without_tool",
             ),
         )
+
+    def _is_terminal_tool_failure(
+        self,
+        decision: PlannerDecision,
+        outcome: ToolExecutionOutcome,
+    ) -> bool:
+        if outcome.status != "failed" or outcome.result is None or outcome.result.error is None:
+            return False
+        if outcome.result.error.retryable:
+            return False
+
+        tool_name = decision.tool_name.strip().lower()
+        if tool_name.startswith("openapi_"):
+            return True
+        return tool_name in {
+            "browser_fetch",
+            "http_api",
+            "open_url",
+            "extract_text",
+            "summarize_page",
+            "source_citation",
+        }
+
+    def _tool_error_consumption_key(
+        self,
+        decision: PlannerDecision,
+        outcome: ToolExecutionOutcome,
+    ) -> str:
+        result = outcome.result
+        error_code = result.error.code if result is not None and result.error is not None else ""
+        call_id = outcome.tool_call_id
+        if not call_id:
+            material = "\0".join(
+                [
+                    decision.tool_name.strip().lower(),
+                    self._normalize_approval_text(decision.tool_input),
+                    error_code,
+                ]
+            )
+            call_id = hashlib.sha256(material.encode("utf-8")).hexdigest()[:16]
+        return f"{call_id}:{error_code}"
+
+    def _build_tool_failure_final_response(
+        self,
+        prompt: str,
+        failures: list[tuple[PlannerDecision, ToolExecutionOutcome]],
+    ) -> str:
+        decision, outcome = failures[0]
+        result = outcome.result
+        error = result.error if result is not None else None
+        details = error.details if error is not None else {}
+        status_code = details.get("status_code")
+        url = str(details.get("url", "") or decision.tool_input).strip()
+        error_label = (
+            f"HTTP {status_code}"
+            if isinstance(status_code, int)
+            else str(error.code if error is not None else "tool_error")
+        )
+        body_preview = self._tool_error_body_preview(outcome.observation, status_code)
+        if not body_preview:
+            body_preview = self._tool_error_body_preview(
+                error.message if error is not None else outcome.observation,
+                status_code,
+            )
+
+        if self._contains_chinese(prompt):
+            lines = [
+                f"外部接口调用失败：{error_label}。",
+            ]
+            if url:
+                lines.append(f"接口：{url}")
+            if body_preview:
+                lines.append(f"返回内容预览：{body_preview}")
+            lines.append("没有可用于总结的成功 API 响应数据。")
+            return "\n".join(lines)
+
+        lines = [
+            f"External API call failed: {error_label}.",
+        ]
+        if url:
+            lines.append(f"Endpoint: {url}")
+        if body_preview:
+            lines.append(f"Returned content preview: {body_preview}")
+        lines.append("No successful API response data was available to summarize.")
+        return "\n".join(lines)
+
+    def _tool_error_body_preview(self, value: str, status_code: Any = None) -> str:
+        text = html.unescape(str(value or ""))
+        if isinstance(status_code, int):
+            marker = f"HTTP {status_code}"
+            marker_index = text.upper().find(marker.upper())
+            if marker_index >= 0:
+                text = text[marker_index + len(marker) :]
+
+        text = re.sub(r"(?is)<script[^>]*>.*?</script>", " ", text)
+        text = re.sub(r"(?is)<style[^>]*>.*?</style>", " ", text)
+        text = re.sub(r"<[^>]+>", " ", text)
+        text = " ".join(text.split())
+        prefixes = (
+            "response:",
+            "failed:",
+        )
+        lowered = text.lower()
+        for prefix in prefixes:
+            if lowered.startswith(prefix):
+                text = text[len(prefix) :].strip()
+                lowered = text.lower()
+        if len(text) > 220:
+            return text[:217].rstrip() + "..."
+        return text
 
     def _build_plan_steps(self, prompt: str) -> list[PlannedStep]:
         pieces: list[str] = []
@@ -1708,6 +1865,19 @@ class AgentRuntime:
     def _normalize_approval_text(self, value: str) -> str:
         return " ".join(value.strip().split())
 
+    def _build_tool_call_id(self, task_id: str, decision: PlannerDecision) -> str:
+        material = "\0".join(
+            [
+                task_id.strip(),
+                str(decision.step_index),
+                decision.planner.strip().lower(),
+                decision.tool_name.strip().lower(),
+                self._normalize_approval_text(decision.tool_input),
+            ]
+        )
+        digest = hashlib.sha256(material.encode("utf-8")).hexdigest()[:16]
+        return f"toolcall_{digest}"
+
     def _execute_tool(
         self,
         task_id: str,
@@ -1718,6 +1888,7 @@ class AgentRuntime:
         prompt: str,
         metadata: dict[str, str],
         recalled_memories: list[dict[str, Any]],
+        tool_call_id: str = "",
     ) -> ToolResult:
         tool = self._tool_registry.get(tool_name)
         if tool is None:
@@ -1753,6 +1924,7 @@ class AgentRuntime:
             tool_name=tool_name,
             input_text=tool_input,
             arguments=self._build_tool_call_arguments(tool_name, tool_input),
+            call_id=tool_call_id,
         )
         result = tool.execute(call, context)
         duration_ms = int((time.time() - started_at) * 1000)

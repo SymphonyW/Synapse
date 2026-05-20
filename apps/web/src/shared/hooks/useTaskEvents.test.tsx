@@ -65,4 +65,117 @@ describe('useTaskEvents', () => {
       status,
     })
   })
+
+  it('resets streamed assistant text when a retry attempt is replayed', async () => {
+    const { result } = renderHook(() =>
+      useTaskEvents({
+        enabled: true,
+        selectedTaskID: 'task-retry',
+        onTerminal: vi.fn(),
+        onError: vi.fn(),
+        tr,
+      }),
+    )
+
+    await waitFor(() => expect(EventSourceMock.instances).toHaveLength(1))
+
+    act(() => {
+      EventSourceMock.instances[0].emit('token', {
+        event_id: 1,
+        token: 'old expanded failure. ',
+      })
+      EventSourceMock.instances[0].emit('info', {
+        event_id: 2,
+        message: 'retry_attempt',
+      })
+      EventSourceMock.instances[0].emit('token', {
+        event_id: 3,
+        token: 'fresh concise failure.',
+      })
+    })
+
+    await waitFor(() =>
+      expect(result.current.responseByTaskID['task-retry']).toBe('fresh concise failure.'),
+    )
+  })
+
+  it('does not append terminal or completed messages to streamed token text', async () => {
+    const { result } = renderHook(() =>
+      useTaskEvents({
+        enabled: true,
+        selectedTaskID: 'task-final',
+        onTerminal: vi.fn(),
+        onError: vi.fn(),
+        tr,
+      }),
+    )
+
+    await waitFor(() => expect(EventSourceMock.instances).toHaveLength(1))
+
+    act(() => {
+      EventSourceMock.instances[0].emit('token', {
+        event_id: 1,
+        token: 'final answer',
+      })
+      EventSourceMock.instances[0].emit('completed', {
+        event_id: 2,
+        message: 'final answer',
+      })
+      EventSourceMock.instances[0].emit('terminal', {
+        task_id: 'task-final',
+        status: 'completed',
+      })
+    })
+
+    await waitFor(() =>
+      expect(result.current.responseByTaskID['task-final']).toBe('final answer'),
+    )
+  })
+
+  it('hydrates completed tasks from the latest retry attempt only', async () => {
+    const { result } = renderHook(() =>
+      useTaskEvents({
+        enabled: true,
+        selectedTaskID: '',
+        hydrateTasks: [
+          {
+            id: 'task-hydrate',
+            user_id: 'alice',
+            prompt: 'call api',
+            status: 'completed',
+            created_at: '2026-05-20T00:00:00Z',
+            updated_at: '2026-05-20T00:00:01Z',
+          },
+        ],
+        onTerminal: vi.fn(),
+        onError: vi.fn(),
+        tr,
+      }),
+    )
+
+    await waitFor(() => expect(EventSourceMock.instances).toHaveLength(1))
+
+    act(() => {
+      EventSourceMock.instances[0].emit('token', {
+        event_id: 1,
+        token: 'old failure. ',
+      })
+      EventSourceMock.instances[0].emit('info', {
+        event_id: 2,
+        message: 'retry_attempt',
+      })
+      EventSourceMock.instances[0].emit('token', {
+        event_id: 3,
+        token: 'fresh failure.',
+      })
+      EventSourceMock.instances[0].emit('terminal', {
+        task_id: 'task-hydrate',
+        status: 'completed',
+      })
+    })
+
+    await waitFor(() =>
+      expect(result.current.responseByTaskID['task-hydrate']).toBe('fresh failure.'),
+    )
+  })
 })

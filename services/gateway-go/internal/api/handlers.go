@@ -945,6 +945,11 @@ func (h *Handler) resolveAssistantMessage(task domain.Task) (string, error) {
 		switch event.Type {
 		case "token":
 			tokenBuilder.WriteString(event.Token)
+		case "info":
+			if strings.TrimSpace(event.Message) == "retry_attempt" {
+				tokenBuilder.Reset()
+				fallbackMessage = ""
+			}
 		case "failed", "canceled":
 			message := strings.TrimSpace(event.Message)
 			if message != "" {

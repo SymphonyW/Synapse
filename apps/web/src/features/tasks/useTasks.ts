@@ -8,6 +8,7 @@ import type {
   BatchCancelResult,
   Task,
   TaskStatus,
+  TerminalTaskStatus,
 } from '../../shared/types/domain'
 import type { ReplayComparePayload } from '../trace/ReplayDiffPanel'
 import {
@@ -31,6 +32,36 @@ type UseTasksOptions = {
 
 export function isCancelableTask(task: Task): boolean {
   return task.status === 'queued' || task.status === 'running' || task.status === 'paused'
+}
+
+export function isTerminalTaskStatus(status: string | undefined): status is TerminalTaskStatus {
+  return status === 'completed' || status === 'failed' || status === 'canceled'
+}
+
+function mergeTaskSnapshot(previous: Task | undefined, incoming: Task): Task {
+  if (previous && isTerminalTaskStatus(previous.status) && !isTerminalTaskStatus(incoming.status)) {
+    return {
+      ...incoming,
+      status: previous.status,
+      error: previous.error,
+      updated_at: previous.updated_at,
+    }
+  }
+  return incoming
+}
+
+function sortTasksByUpdatedAt(items: Task[]): Task[] {
+  return items.sort(
+    (left, right) =>
+      new Date(right.updated_at).getTime() - new Date(left.updated_at).getTime(),
+  )
+}
+
+function mergeTaskList(previous: Task[], incoming: Task[]): Task[] {
+  const previousByID = new Map(previous.map((task) => [task.id, task]))
+  return sortTasksByUpdatedAt(
+    incoming.map((task) => mergeTaskSnapshot(previousByID.get(task.id), task)),
+  )
 }
 
 export function useTasks({ autoRefresh = true, tr }: UseTasksOptions) {
@@ -77,24 +108,47 @@ export function useTasks({ autoRefresh = true, tr }: UseTasksOptions) {
       const next = [...previous]
       const index = next.findIndex((item) => item.id === incoming.id)
       if (index >= 0) {
-        next[index] = incoming
+        next[index] = mergeTaskSnapshot(next[index], incoming)
       } else {
         next.unshift(incoming)
       }
 
-      next.sort(
-        (left, right) =>
-          new Date(right.updated_at).getTime() - new Date(left.updated_at).getTime(),
-      )
-      return next
+      return sortTasksByUpdatedAt(next)
     })
   }, [])
+
+  const patchTaskStatus = useCallback(
+    (taskID: string, status: TaskStatus, error?: string) => {
+      setTasks((previous) => {
+        let changed = false
+        const next = previous.map((task) => {
+          if (task.id !== taskID) {
+            return task
+          }
+          changed = true
+          return {
+            ...task,
+            status,
+            ...(error !== undefined ? { error } : {}),
+            updated_at: new Date().toISOString(),
+          }
+        })
+
+        if (!changed) {
+          return previous
+        }
+
+        return sortTasksByUpdatedAt(next)
+      })
+    },
+    [],
+  )
 
   const refreshTasks = useCallback(async () => {
     setRefreshingTasks(true)
     try {
       const response = await listTasks(TASK_LIMIT, taskStatusFilter)
-      setTasks(response.items)
+      setTasks((previous) => mergeTaskList(previous, response.items))
       setSelectedTaskID((previous) => {
         if (response.items.length === 0) {
           return ''
@@ -120,12 +174,14 @@ export function useTasks({ autoRefresh = true, tr }: UseTasksOptions) {
       try {
         const task = await getTask(taskID)
         upsertTask(task)
+        return task
       } catch (error) {
         setRequestError(
           error instanceof Error
             ? error.message
             : tr('获取任务状态失败', 'Failed to fetch task state'),
         )
+        return null
       }
     },
     [tr, upsertTask],
@@ -503,6 +559,7 @@ export function useTasks({ autoRefresh = true, tr }: UseTasksOptions) {
     setReplayCompareData,
     refreshTasks,
     fetchTask,
+    patchTaskStatus,
     create,
     replay,
     approve,

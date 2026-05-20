@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { STREAM_EVENT_TYPES } from '../utils/constants'
 import { appendUniqueEvents } from '../utils/events'
-import type { StreamEvent, StreamState, Task } from '../types/domain'
+import type { StreamEvent, StreamState, Task, TerminalTaskEvent, TerminalTaskStatus } from '../types/domain'
 
 type Translate = (zh: string, en: string) => string
 
@@ -9,9 +9,15 @@ type UseTaskEventsOptions = {
   enabled: boolean
   selectedTaskID: string
   hydrateTasks?: Task[]
-  onTerminal?: (taskID: string) => void | Promise<void>
+  onTerminal?: (event: TerminalTaskEvent) => void | Promise<void>
   onError?: (message: string) => void
   tr: Translate
+}
+
+function readTerminalStatus(value: unknown): TerminalTaskStatus | undefined {
+  return value === 'completed' || value === 'failed' || value === 'canceled'
+    ? value
+    : undefined
 }
 
 export function useTaskEvents({
@@ -288,7 +294,10 @@ export function useTaskEvents({
             stopped = true
             setStreamState('closed')
             source.close()
-            void onTerminal?.(taskID)
+            void onTerminal?.({
+              taskID: typeof payload.task_id === 'string' && payload.task_id.trim() !== '' ? payload.task_id : taskID,
+              status: readTerminalStatus(payload.status),
+            })
           }
         } catch {
           onError?.(tr('解析事件流数据失败', 'Failed to parse stream event payload'))

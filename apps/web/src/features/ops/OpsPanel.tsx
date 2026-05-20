@@ -1,10 +1,8 @@
 import { useMemo, useState } from 'react'
 import type { FormEvent } from 'react'
 import type {
-  ApprovedToolCallPayload,
   Language,
   SessionIdentity,
-  Task,
 } from '../../shared/types/domain'
 import {
   DEFAULT_APPROVED_TOOLS,
@@ -15,6 +13,7 @@ import { taskEventsForDisplay } from '../../shared/utils/events'
 import { useTaskEvents } from '../../shared/hooks/useTaskEvents'
 import { TaskDetailPanel } from '../tasks/TaskDetailPanel'
 import { TaskListPanel } from '../tasks/TaskListPanel'
+import { buildApprovalPayloadFromTask } from '../tasks/approval'
 import { useTasks } from '../tasks/useTasks'
 import { useDeadLetters } from './useDeadLetters'
 
@@ -45,26 +44,6 @@ function taskStatusLabel(status: string | undefined, tr: Translate): string {
   }
 }
 
-function buildApprovedToolCallFromTask(task: Task, tr: Translate): ApprovedToolCallPayload | null {
-  const metadata = task.metadata ?? {}
-  const toolName = (metadata.agent_required_tool ?? '').trim()
-  const toolInput = (metadata.agent_required_tool_input ?? '').trim()
-  if (toolName === '' || toolInput === '') {
-    return null
-  }
-
-  const resumeStepIndex = Number.parseInt(metadata.agent_resume_step_index ?? '', 10)
-  return {
-    tool_name: toolName,
-    tool_input: toolInput,
-    risk_level: (metadata.agent_required_tool_risk_level ?? '').trim(),
-    reason:
-      (metadata.agent_required_reason ?? '').trim() ||
-      tr('人工审批通过并恢复任务', 'Task approved and resumed by operator'),
-    resume_step_index: Number.isFinite(resumeStepIndex) ? resumeStepIndex : 0,
-  }
-}
-
 export function OpsPanel({ currentUser, language, tr }: OpsPanelProps) {
   const tasks = useTasks({ tr })
   const deadLetters = useDeadLetters({ enabled: currentUser.role === 'admin', tr })
@@ -78,7 +57,7 @@ export function OpsPanel({ currentUser, language, tr }: OpsPanelProps) {
   const taskEvents = useTaskEvents({
     enabled: true,
     selectedTaskID: tasks.selectedTaskID,
-    onTerminal: async (taskID) => {
+    onTerminal: async ({ taskID }) => {
       await tasks.fetchTask(taskID)
       await deadLetters.refreshDeadLetters()
     },
@@ -177,12 +156,20 @@ export function OpsPanel({ currentUser, language, tr }: OpsPanelProps) {
       .map((item) => item.trim())
       .filter((item) => item.length > 0)
     const taskToApprove = tasks.tasks.find((task) => task.id === taskID)
-    const approvedToolCall = taskToApprove ? buildApprovedToolCallFromTask(taskToApprove, tr) : null
-    await tasks.approve(taskID, {
-      requested_by: currentUser.username,
-      reason: tr('人工审批通过并恢复任务', 'Task approved and resumed by operator'),
-      ...(approvedToolCall ? { approved_tool_call: approvedToolCall } : { approved_tools: approvedTools }),
-    })
+    const reason = tr('人工审批通过并恢复任务', 'Task approved and resumed by operator')
+    await tasks.approve(
+      taskID,
+      taskToApprove
+        ? buildApprovalPayloadFromTask(taskToApprove, currentUser.username, tr, {
+            fallbackApprovedTools: approvedTools,
+            reason,
+          })
+        : {
+            requested_by: currentUser.username,
+            reason,
+            approved_tools: approvedTools,
+          },
+    )
     await deadLetters.refreshDeadLetters()
   }
 

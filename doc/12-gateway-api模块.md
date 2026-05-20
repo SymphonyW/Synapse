@@ -29,6 +29,7 @@ Gateway API 模块位于 [services/gateway-go/internal/api](../services/gateway-
 | POST | `/v1/tasks/{taskID}/approve` | `ApproveTask` | owner/admin |
 | POST | `/v1/tasks/{taskID}/replay` | `ReplayTask` | owner/admin |
 | DELETE | `/v1/conversations/{conversationID}` | `DeleteConversation` | 当前用户会话 |
+| GET | `/v1/tools/catalog` | `ListToolCatalog` | 登录 |
 | GET | `/v1/dead-letters` | `ListDeadLetters` | admin |
 | GET | `/v1/admin/tool-policy` | `GetToolPolicy` | admin |
 | PUT | `/v1/admin/tool-policy` | `PutToolPolicy` | admin |
@@ -78,6 +79,7 @@ Gateway API 模块位于 [services/gateway-go/internal/api](../services/gateway-
 3. Gateway 会注入 `auth_user_role`、`auth_username`。
 4. 如果 `client_view=chat` 或存在 `conversation_id`，Gateway 会构建会话上下文，并写入 `model_messages_json`。
 5. 任务先创建为 `queued`，再入队。
+6. 聊天页只有在用户显式开启“预授权高风险工具”且选择了至少一个工具时，才会写入 `approval_granted=true` 和逗号分隔的 `approved_tools`；该 metadata 只影响当前任务，不能绕过 ToolPolicy。
 
 列表查询：
 
@@ -156,6 +158,39 @@ DELETE /v1/conversations/{conversationID}
 
 管理员可以通过 `user_id` 查询、写入或删除指定用户记忆；普通用户传入 `user_id` 会被锁定为自己的用户名。
 
+## 用户态工具目录接口
+
+```text
+GET /v1/tools/catalog
+```
+
+该接口供普通聊天页展示工具预授权选择器使用，要求已登录，但不要求管理员权限。Gateway 从 AI Engine 的 `ListTools` 获取当前有效工具目录，只返回展示所需字段：
+
+```json
+{
+  "items": [
+    {
+      "name": "http_api",
+      "description": "HTTP API tool",
+      "risk_level": "high",
+      "requires_approval": true,
+      "provider_name": "builtin",
+      "currently_disabled": false,
+      "allowed_for_role": true,
+      "selectable": true
+    }
+  ],
+  "count": 1
+}
+```
+
+字段语义：
+
+1. `allowed_for_role` 表示当前登录角色是否被工具策略允许。
+2. `selectable` 仅在当前角色可用且工具未禁用时为 true。
+3. `currently_disabled=true` 或 `allowed_for_role=false` 时，前端只能展示置灰状态，不能选择。
+4. 响应不包含管理员写能力字段，也不暴露可修改策略的接口；真正执行仍由 ToolPolicy 与 Runtime 审批匹配裁决。
+
 ## SSE
 
 ```text
@@ -181,7 +216,7 @@ GET /v1/tasks/{taskID}/events?last_event_id=0
 {"task_id":"...","status":"completed"}
 ```
 
-事件名为 `terminal`。
+事件名为 `terminal`。`status` 可能为 `completed`、`failed` 或 `canceled`，前端会优先用该状态更新本地任务缓存，再请求任务详情做最终一致性刷新。
 
 ## 状态码
 

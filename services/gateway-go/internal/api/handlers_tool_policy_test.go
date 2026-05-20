@@ -3,6 +3,7 @@ package api
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -39,8 +40,9 @@ func (c *recordingToolPolicyAgentClient) ApplyToolPolicy(_ context.Context, requ
 func (c *recordingToolPolicyAgentClient) ListTools(context.Context) (*agentv1.ListToolsResponse, error) {
 	return &agentv1.ListToolsResponse{
 		Items: []*agentv1.ToolDescriptor{
-			{Name: "calculator", Description: "math", RiskLevel: "low", ProviderName: "builtin"},
-			{Name: "retrieval", Description: "memory", RiskLevel: "low", ProviderName: "builtin"},
+			{Name: "calculator", Description: "math", RiskLevel: "low", ProviderName: "builtin", AllowedRoles: []string{"user", "admin"}},
+			{Name: "retrieval", Description: "memory", RiskLevel: "low", ProviderName: "builtin", AllowedRoles: []string{"admin"}},
+			{Name: "http_api", Description: "http", RiskLevel: "high", RequiresApproval: true, ProviderName: "builtin", CurrentlyDisabled: true, AllowedRoles: []string{"user", "admin"}},
 		},
 	}, nil
 }
@@ -149,10 +151,75 @@ func TestListAdminToolsReturnsMetadata(t *testing.T) {
 		Count int                      `json:"count"`
 	}
 	decodeJSON(t, response, &payload)
-	if payload.Count != 2 {
-		t.Fatalf("unexpected tool count: got %d want 2", payload.Count)
+	if payload.Count != 3 {
+		t.Fatalf("unexpected tool count: got %d want 3", payload.Count)
 	}
 	if payload.Items[0].Name != "calculator" || payload.Items[0].ProviderName != "builtin" {
 		t.Fatalf("unexpected first tool payload: %#v", payload.Items[0])
+	}
+}
+
+func TestListToolCatalogForAuthenticatedUser(t *testing.T) {
+	taskStore := store.NewInMemory()
+	router := NewRouter(NewHandler(taskStore, &recordingToolPolicyAgentClient{}, queue.NewInMemoryQueue(8), &recordingTaskCanceler{}))
+
+	request := httptest.NewRequest(http.MethodGet, "/v1/tools/catalog", nil)
+	attachSessionCookie(t, taskStore, request, "regular-user", domain.UserRoleUser)
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, request)
+
+	if response.Code != http.StatusOK {
+		t.Fatalf("unexpected status: got %d want %d", response.Code, http.StatusOK)
+	}
+
+	bodyBytes := append([]byte(nil), response.Body.Bytes()...)
+	var raw map[string]any
+	if err := json.Unmarshal(bodyBytes, &raw); err != nil {
+		t.Fatalf("failed to decode raw response: %v", err)
+	}
+	encodedItems, ok := raw["items"].([]any)
+	if !ok {
+		t.Fatalf("items should be an array: %#v", raw)
+	}
+	if _, exists := encodedItems[0].(map[string]any)["allowed_roles"]; exists {
+		t.Fatalf("public catalog must not expose allowed_roles: %#v", encodedItems[0])
+	}
+
+	var payload struct {
+		Items []publicToolDescriptorResponse `json:"items"`
+		Count int                            `json:"count"`
+	}
+	if err := json.Unmarshal(bodyBytes, &payload); err != nil {
+		t.Fatalf("failed to decode typed response: %v", err)
+	}
+	if payload.Count != 3 {
+		t.Fatalf("unexpected tool count: got %d want 3", payload.Count)
+	}
+
+	byName := map[string]publicToolDescriptorResponse{}
+	for _, item := range payload.Items {
+		byName[item.Name] = item
+	}
+	if !byName["calculator"].AllowedForRole || !byName["calculator"].Selectable {
+		t.Fatalf("calculator should be selectable for user: %#v", byName["calculator"])
+	}
+	if byName["retrieval"].AllowedForRole || byName["retrieval"].Selectable {
+		t.Fatalf("retrieval should be unavailable for user: %#v", byName["retrieval"])
+	}
+	if !byName["http_api"].CurrentlyDisabled || byName["http_api"].Selectable {
+		t.Fatalf("disabled http_api should not be selectable: %#v", byName["http_api"])
+	}
+}
+
+func TestListToolCatalogRequiresAuthentication(t *testing.T) {
+	taskStore := store.NewInMemory()
+	router := NewRouter(NewHandler(taskStore, &recordingToolPolicyAgentClient{}, queue.NewInMemoryQueue(8), &recordingTaskCanceler{}))
+
+	request := httptest.NewRequest(http.MethodGet, "/v1/tools/catalog", nil)
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, request)
+
+	if response.Code != http.StatusUnauthorized {
+		t.Fatalf("unexpected status: got %d want %d", response.Code, http.StatusUnauthorized)
 	}
 }

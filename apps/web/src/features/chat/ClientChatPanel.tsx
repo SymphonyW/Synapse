@@ -1,21 +1,25 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { FormEvent, KeyboardEvent } from 'react'
-import type { Language, SessionIdentity, Task } from '../../shared/types/domain'
+import type { Language, SessionIdentity, Task, TerminalTaskEvent, ToolCatalogItem } from '../../shared/types/domain'
 import {
   CLIENT_CONVERSATION_ID_KEY,
   CLIENT_USER_MESSAGE_KEY,
-  DEFAULT_APPROVED_TOOLS,
   NEW_CONVERSATION_DRAFT_ID,
 } from '../../shared/utils/constants'
 import { taskEventsForDisplay } from '../../shared/utils/events'
 import { createConversationID, formatDateTime, statusClass, truncatePreview } from '../../shared/utils/format'
 import { useTaskEvents } from '../../shared/hooks/useTaskEvents'
+import { isTaskApprovalRequired } from '../tasks/approval'
+import { listToolCatalog } from '../tasks/api'
+import { isTerminalTaskStatus } from '../tasks/useTasks'
 import { useTasks } from '../tasks/useTasks'
 import { deleteConversation } from './api'
+import { ApprovalRequiredCard } from './ApprovalRequiredCard'
 import { AgentTimeline } from './agentTimeline'
 import { assistantTextForTask } from './agentTimelineModel'
 import { ChatMarkdown } from './ChatMarkdown'
 import { shouldSubmitComposerOnKeyDown } from './composer'
+import { ToolPreauthorizationPanel } from './ToolPreauthorizationPanel'
 
 type Translate = (zh: string, en: string) => string
 
@@ -23,6 +27,14 @@ type ClientChatPanelProps = {
   currentUser: SessionIdentity
   language: Language
   tr: Translate
+}
+
+const TERMINAL_FETCH_RETRY_DELAYS_MS = [100, 250, 500]
+
+function wait(ms: number): Promise<void> {
+  return new Promise((resolve) => {
+    window.setTimeout(resolve, ms)
+  })
 }
 
 function taskStatusLabel(status: string | undefined, tr: Translate): string {
@@ -67,7 +79,12 @@ export function ClientChatPanel({ currentUser, language, tr }: ClientChatPanelPr
   const [agentEnabled, setAgentEnabled] = useState(true)
   const [memoryWriteEnabled, setMemoryWriteEnabled] = useState(true)
   const [approvalGranted, setApprovalGranted] = useState(false)
-  const [approvedToolsInput, setApprovedToolsInput] = useState(DEFAULT_APPROVED_TOOLS)
+  const [selectedApprovedTools, setSelectedApprovedTools] = useState<string[]>([])
+  const [toolCatalog, setToolCatalog] = useState<ToolCatalogItem[]>([])
+  const [toolCatalogLoaded, setToolCatalogLoaded] = useState(false)
+  const [loadingToolCatalog, setLoadingToolCatalog] = useState(false)
+  const [toolCatalogError, setToolCatalogError] = useState('')
+  const [approvedApprovalTaskIDs, setApprovedApprovalTaskIDs] = useState<string[]>([])
   const [showClientComposerTools, setShowClientComposerTools] = useState(false)
 
   const clientTranscriptRef = useRef<HTMLDivElement | null>(null)
@@ -133,12 +150,36 @@ export function ClientChatPanel({ currentUser, language, tr }: ClientChatPanelPr
       ? clientConversations.find((conversation) => conversation.id === selectedConversationID) ?? null
       : null
   const activeConversationTask = selectedConversationTasks.at(-1) ?? null
+  const fetchTask = tasks.fetchTask
+  const patchTaskStatus = tasks.patchTaskStatus
+
+  const handleTaskTerminal = useCallback(
+    async ({ taskID, status }: TerminalTaskEvent) => {
+      if (status) {
+        patchTaskStatus(taskID, status)
+      }
+
+      const firstSnapshot = await fetchTask(taskID)
+      if (!status || isTerminalTaskStatus(firstSnapshot?.status)) {
+        return
+      }
+
+      for (const delay of TERMINAL_FETCH_RETRY_DELAYS_MS) {
+        await wait(delay)
+        const nextSnapshot = await fetchTask(taskID)
+        if (isTerminalTaskStatus(nextSnapshot?.status)) {
+          return
+        }
+      }
+    },
+    [fetchTask, patchTaskStatus],
+  )
 
   const taskEvents = useTaskEvents({
     enabled: true,
     selectedTaskID: tasks.selectedTaskID,
     hydrateTasks: selectedConversationTasks,
-    onTerminal: tasks.fetchTask,
+    onTerminal: handleTaskTerminal,
     onError: tasks.setRequestError,
     tr,
   })
@@ -153,6 +194,10 @@ export function ClientChatPanel({ currentUser, language, tr }: ClientChatPanelPr
     selectedConversationID === NEW_CONVERSATION_DRAFT_ID
       ? tr('新对话', 'New Chat')
       : selectedConversation?.title || tr('会话', 'Conversation')
+  const approvedApprovalTaskIDSet = useMemo(
+    () => new Set(approvedApprovalTaskIDs),
+    [approvedApprovalTaskIDs],
+  )
 
   const conversationMessages = useMemo(
     () =>
@@ -320,14 +365,13 @@ export function ClientChatPanel({ currentUser, language, tr }: ClientChatPanelPr
       [CLIENT_USER_MESSAGE_KEY]: messageInput,
     }
     if (approvalGranted) {
-      metadata.approval_granted = 'true'
-    }
-    const approvedTools = approvedToolsInput
-      .split(',')
-      .map((item) => item.trim())
-      .filter((item) => item.length > 0)
-    if (approvedTools.length > 0) {
-      metadata.approved_tools = approvedTools.join(',')
+      const approvedTools = selectedApprovedTools
+        .map((item) => item.trim())
+        .filter((item) => item.length > 0)
+      if (approvedTools.length > 0) {
+        metadata.approval_granted = 'true'
+        metadata.approved_tools = approvedTools.join(',')
+      }
     }
 
     const created = await tasks.create({
@@ -343,6 +387,29 @@ export function ClientChatPanel({ currentUser, language, tr }: ClientChatPanelPr
     transcriptPinnedToBottomRef.current = true
     setSelectedConversationID(nextConversationID)
     setPrompt('')
+  }
+
+  const handleApprovalAccepted = async (resumedTask: Task) => {
+    setApprovedApprovalTaskIDs((previous) =>
+      previous.includes(resumedTask.id) ? previous : [...previous, resumedTask.id],
+    )
+    tasks.upsertTask(resumedTask)
+    await tasks.fetchTask(resumedTask.id)
+  }
+
+  const handleCancelApprovalTask = async (taskID: string) => {
+    await tasks.cancel(taskID, {
+      requested_by: currentUser.username,
+      reason: tr('用户在聊天会话中取消任务', 'Canceled from chat approval request'),
+    })
+  }
+
+  const toggleSelectedApprovedTool = (toolName: string) => {
+    setSelectedApprovedTools((previous) =>
+      previous.includes(toolName)
+        ? previous.filter((item) => item !== toolName)
+        : [...previous, toolName],
+    )
   }
 
   const handlePromptKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
@@ -364,6 +431,53 @@ export function ClientChatPanel({ currentUser, language, tr }: ClientChatPanelPr
     event.preventDefault()
     event.currentTarget.form?.requestSubmit()
   }
+
+  useEffect(() => {
+    setApprovedApprovalTaskIDs((previous) =>
+      previous.filter((taskID) => {
+        const task = tasks.tasks.find((item) => item.id === taskID)
+        return !!task && (task.status === 'queued' || task.status === 'running' || task.status === 'paused')
+      }),
+    )
+  }, [tasks.tasks])
+
+  useEffect(() => {
+    if (!showClientComposerTools || !approvalGranted || toolCatalogLoaded) {
+      return
+    }
+
+    let canceled = false
+    setLoadingToolCatalog(true)
+    setToolCatalogError('')
+    void listToolCatalog()
+      .then((response) => {
+        if (canceled) {
+          return
+        }
+        setToolCatalog(response.items)
+        setToolCatalogLoaded(true)
+      })
+      .catch((error) => {
+        if (canceled) {
+          return
+        }
+        setToolCatalogError(
+          error instanceof Error
+            ? error.message
+            : tr('工具目录加载失败', 'Failed to load tool catalog'),
+        )
+        setToolCatalogLoaded(true)
+      })
+      .finally(() => {
+        if (!canceled) {
+          setLoadingToolCatalog(false)
+        }
+      })
+
+    return () => {
+      canceled = true
+    }
+  }, [approvalGranted, showClientComposerTools, toolCatalogLoaded, tr])
 
   return (
     <>
@@ -482,13 +596,27 @@ export function ClientChatPanel({ currentUser, language, tr }: ClientChatPanelPr
                       )}
                     </div>
                     {isAssistant && (
-                      <AgentTimeline
-                        finalAnswer={taskEvents.responseByTaskID[message.taskID] ?? ''}
-                        language={language}
-                        task={message.task}
-                        taskEvents={timelineEvents}
-                        tr={tr}
-                      />
+                      <>
+                        <AgentTimeline
+                          finalAnswer={taskEvents.responseByTaskID[message.taskID] ?? ''}
+                          language={language}
+                          task={message.task}
+                          taskEvents={timelineEvents}
+                          tr={tr}
+                        />
+                        {(isTaskApprovalRequired(message.task) || approvedApprovalTaskIDSet.has(message.taskID)) && (
+                          <ApprovalRequiredCard
+                            approved={approvedApprovalTaskIDSet.has(message.taskID)}
+                            canceling={tasks.cancelingTaskID === message.taskID}
+                            currentUsername={currentUser.username}
+                            onApproved={handleApprovalAccepted}
+                            onCancel={handleCancelApprovalTask}
+                            onError={tasks.setRequestError}
+                            task={message.task}
+                            tr={tr}
+                          />
+                        )}
+                      </>
                     )}
                   </article>
                 )
@@ -526,11 +654,17 @@ export function ClientChatPanel({ currentUser, language, tr }: ClientChatPanelPr
                   <input checked={approvalGranted} onChange={(event) => setApprovalGranted(event.target.checked)} type="checkbox" />
                   {tr('预授权高风险工具', 'Pre-approve high-risk tools')}
                 </label>
-                <input
-                  value={approvedToolsInput}
-                  onChange={(event) => setApprovedToolsInput(event.target.value)}
-                  placeholder={tr('授权工具列表（逗号分隔）', 'Approved tools (comma-separated)')}
-                />
+                {approvalGranted && (
+                  <ToolPreauthorizationPanel
+                    error={toolCatalogError}
+                    loading={loadingToolCatalog}
+                    onClear={() => setSelectedApprovedTools([])}
+                    onToggleTool={toggleSelectedApprovedTool}
+                    selectedTools={selectedApprovedTools}
+                    tools={toolCatalog}
+                    tr={tr}
+                  />
+                )}
               </div>
             )}
             <textarea

@@ -41,6 +41,18 @@ type toolDescriptorResponse struct {
 	AllowedRoles      []string `json:"allowed_roles"`
 }
 
+type publicToolDescriptorResponse struct {
+	Name              string `json:"name"`
+	Description       string `json:"description"`
+	RiskLevel         string `json:"risk_level"`
+	RequiresApproval  bool   `json:"requires_approval"`
+	ProviderName      string `json:"provider_name"`
+	CurrentlyDisabled bool   `json:"currently_disabled"`
+	AllowedForRole    bool   `json:"allowed_for_role"`
+	Selectable        bool   `json:"selectable"`
+	DisabledReason    string `json:"disabled_reason,omitempty"`
+}
+
 func (h *Handler) GetToolPolicy(w http.ResponseWriter, r *http.Request) {
 	if _, ok := h.requireAdminSession(w, r); !ok {
 		return
@@ -200,6 +212,61 @@ func (h *Handler) ListAdminTools(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, http.StatusOK, map[string]any{"items": items, "count": len(items)})
+}
+
+func (h *Handler) ListToolCatalog(w http.ResponseWriter, r *http.Request) {
+	session, ok := h.requireSession(w, r)
+	if !ok {
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(r.Context(), toolPolicyAPITimeout)
+	defer cancel()
+	response, err := h.agentClient.ListTools(ctx)
+	if err != nil {
+		writeJSON(w, http.StatusBadGateway, map[string]string{"error": "failed to list tools"})
+		return
+	}
+
+	role := strings.ToLower(strings.TrimSpace(string(session.Role)))
+	items := make([]publicToolDescriptorResponse, 0, len(response.GetItems()))
+	for _, item := range response.GetItems() {
+		allowedForRole := toolAllowedForRole(item.GetAllowedRoles(), role)
+		disabled := item.GetCurrentlyDisabled()
+		disabledReason := ""
+		if disabled {
+			disabledReason = "disabled"
+		} else if !allowedForRole {
+			disabledReason = "not_allowed_for_role"
+		}
+
+		items = append(items, publicToolDescriptorResponse{
+			Name:              item.GetName(),
+			Description:       item.GetDescription(),
+			RiskLevel:         item.GetRiskLevel(),
+			RequiresApproval:  item.GetRequiresApproval(),
+			ProviderName:      item.GetProviderName(),
+			CurrentlyDisabled: disabled,
+			AllowedForRole:    allowedForRole,
+			Selectable:        allowedForRole && !disabled,
+			DisabledReason:    disabledReason,
+		})
+	}
+
+	writeJSON(w, http.StatusOK, map[string]any{"items": items, "count": len(items)})
+}
+
+func toolAllowedForRole(rawRoles []string, role string) bool {
+	if len(rawRoles) == 0 {
+		return false
+	}
+	for _, rawRole := range rawRoles {
+		normalized := strings.ToLower(strings.TrimSpace(rawRole))
+		if normalized == "*" || normalized == role {
+			return true
+		}
+	}
+	return false
 }
 
 func normalizeToolPolicyRequest(

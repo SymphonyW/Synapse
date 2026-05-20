@@ -8,7 +8,7 @@ Synapse 把任务编排、工具调用、审批暂停与恢复、长期记忆和
 |---|---|
 | 异步任务生命周期 | `queued / running / paused / completed / failed / canceled` 全链路可追踪 |
 | 工具治理 | 角色授权、禁用、审批、审计统一收口，不让外部工具绕过边界 |
-| 审批暂停与恢复 | 高风险调用先停住，再按精确工具调用恢复，而不是粗暴放行 |
+| 审批暂停与恢复 | 高风险调用先停住，owner 可在聊天内审批，admin 可在运维台审批，再按精确工具调用恢复，终态由 SSE 立即同步 |
 | 长期记忆 | 既能本地零依赖运行，也能切到向量记忆做语义召回 |
 | Trace + Regression | 既能看清一次任务怎么走，也能持续验证 Runtime 没退化 |
 
@@ -76,13 +76,13 @@ flowchart LR
 | Worker 执行 | 从队列消费任务，调用 AI Engine gRPC stream，持久化 started/info/token/completed/failed 事件 | [processor.go](services/gateway-go/internal/worker/processor.go) | 已完成 |
 | 取消能力 | 支持单任务取消、批量取消、重复取消幂等、终态冲突保护 | [handlers.go](services/gateway-go/internal/api/handlers.go) | 已完成 |
 | 重试、死信与重放 | Worker 有界重试，失败耗尽后写入死信，可通过接口重放 | [processor.go](services/gateway-go/internal/worker/processor.go) | 已完成 |
-| 审批暂停与恢复 | 高风险工具触发 `approval_required` 后任务进入 paused，审批后写入恢复元数据并重新入队 | [handlers.go](services/gateway-go/internal/api/handlers.go), [runtime.py](services/ai-engine-py/app/runtime.py) | 已完成 |
+| 审批暂停与恢复 | 高风险工具触发 `approval_required` 后任务进入 paused，普通用户可在聊天内审批自己的任务，admin 可在运维台审批任意任务；审批恢复后的 completed/failed/canceled 由 terminal SSE status 立即同步到聊天和会话列表 | [handlers.go](services/gateway-go/internal/api/handlers.go), [runtime.py](services/ai-engine-py/app/runtime.py), [ApprovalRequiredCard.tsx](apps/web/src/features/chat/ApprovalRequiredCard.tsx) | 已完成 |
 | 会话上下文 | Web 会话按 `conversation_id` 聚合，Gateway 从历史任务和事件构建 `model_messages_json` | [handlers.go](services/gateway-go/internal/api/handlers.go), [App.tsx](apps/web/src/App.tsx) | 已完成 |
 | 会话删除 | 删除当前用户指定会话下的任务、事件和死信记录 | [handlers.go](services/gateway-go/internal/api/handlers.go) | 已完成 |
 | 长期记忆 | Agent 自动写入和召回文件型记忆，Gateway 暴露记忆管理 API，Web 支持列表、召回测试、手工写入和删除 | [memory.py](services/ai-engine-py/app/memory.py), [handlers_memory.go](services/gateway-go/internal/api/handlers_memory.go), [features/memory](apps/web/src/features/memory) | 已完成 |
-| 工具治理 | 内置 retrieval/calculator/browser/http/code/json/browser 操作工具，支持角色授权、审批、禁用、审计和 Web 管理中心 | [tools](services/ai-engine-py/app/tools), [ToolPolicyPanel.tsx](apps/web/src/features/tool-policy/ToolPolicyPanel.tsx) | 已完成 |
+| 工具治理 | 内置 retrieval/calculator/browser/http/code/json/browser 操作工具，支持角色授权、审批、禁用、审计、用户态只读工具目录和 Web 管理中心 | [tools](services/ai-engine-py/app/tools), [ToolPolicyPanel.tsx](apps/web/src/features/tool-policy/ToolPolicyPanel.tsx) | 已完成 |
 | 工具扩展 | 支持 LocalClass provider、OpenAPI HTTP executor 和 MCP stdio adapter provider 接入 | [providers.py](services/ai-engine-py/app/tools/providers.py), [openapi_executor.py](services/ai-engine-py/app/tools/openapi_executor.py), [mcp_stdio.py](services/ai-engine-py/app/tools/mcp_stdio.py) | 部分完成 |
-| Web 控制台 | 用户聊天视图、长期记忆管理视图、运维视图、工具策略页、任务列表、审批恢复、死信重放、Agent Trace 工作台 | [App.tsx](apps/web/src/App.tsx), [features/memory](apps/web/src/features/memory), [features/tool-policy](apps/web/src/features/tool-policy), [features/trace](apps/web/src/features/trace) | 已完成 |
+| Web 控制台 | 用户聊天视图、聊天内审批、聊天高级工具预授权面板、长期记忆管理视图、运维视图、工具策略页、任务列表、审批恢复、死信重放、Agent Trace 工作台 | [App.tsx](apps/web/src/App.tsx), [features/chat](apps/web/src/features/chat), [features/memory](apps/web/src/features/memory), [features/tool-policy](apps/web/src/features/tool-policy), [features/trace](apps/web/src/features/trace) | 已完成 |
 | Agent 回归评测 | 覆盖工具、浏览、记忆、审批、失败恢复等 mock 回归用例 | [regression.py](services/ai-engine-py/app/benchmarks/regression.py) | 已完成 |
 | 真实模型 Agent Benchmark | 对比不同真实 provider 在同一套 Agent Runtime 下的质量、延迟、工具、审批与记忆表现 | [live_benchmark.py](services/ai-engine-py/app/benchmarks/live_benchmark.py) | 已完成 |
 
@@ -137,7 +137,7 @@ flowchart TD
 4. Worker 从队列取任务，调用 AI Engine `SubmitTask` gRPC 流。
 5. AI Engine 输出 `started/info/token/completed/failed` 事件。
 6. Gateway 持久化事件，并通过 `/v1/tasks/{taskID}/events` SSE 增量输出。
-7. 如果 AI Engine 输出 `approval_required`，Worker 将任务切到 `paused`，等待 `/approve` 恢复。
+7. 如果 AI Engine 输出 `approval_required`，Worker 将任务切到 `paused`，普通用户可在聊天会话中审批自己的任务，admin 可在运维台审批任意任务，然后通过 `/approve` 恢复。
 8. 长期记忆默认仍由 AI Engine 文件后端保存，也可通过配置切换到向量后端；Gateway 的 `/v1/memories` API 继续转发同一套 gRPC Memory RPC。
 
 架构优点：
@@ -521,7 +521,7 @@ Web 验证：
 
 1. 打开 http://127.0.0.1:5173。
 2. 使用 `admin` / `123456` 登录。
-3. 在用户视图创建任务，确认聊天流有 token 输出。
+3. 在用户视图创建任务，确认聊天流有 token 输出；展开高级设置时，工具预授权以按钮多选展示并显示风险等级。
 4. 进入记忆页，确认可以刷新列表、手工写入一条记忆、执行 recall 并看到 score、删除该记忆。
 5. 管理员在记忆页输入目标 `user_id` 后可查询指定用户记忆；普通用户不会看到该输入控件。
 6. 切到运维视图，确认任务列表、Agent Trace 工作台、取消、死信列表等面板可见。
@@ -543,9 +543,10 @@ Web 验证：
 | GET | `/v1/tasks/{taskID}/events` | SSE 事件流，支持 `last_event_id` | 是 |
 | POST | `/v1/tasks/{taskID}/cancel` | 取消单任务 | 是 |
 | POST | `/v1/tasks/cancel` | 批量取消 | 是 |
-| POST | `/v1/tasks/{taskID}/approve` | 审批 paused 任务并恢复 | 是 |
+| POST | `/v1/tasks/{taskID}/approve` | 审批 paused 任务并恢复 | owner 或管理员 |
 | POST | `/v1/tasks/{taskID}/replay` | 重放非 running 任务 | 是 |
 | DELETE | `/v1/conversations/{conversationID}` | 删除当前用户会话下所有任务 | 是 |
+| GET | `/v1/tools/catalog` | 聊天页读取安全工具目录，用于工具预授权选择器 | 是 |
 | GET | `/v1/dead-letters` | 查询死信任务 | 管理员 |
 | GET | `/v1/admin/tool-policy` | 查询当前工具策略 | 管理员 |
 | PUT | `/v1/admin/tool-policy` | 全量更新工具策略并热应用 | 管理员 |

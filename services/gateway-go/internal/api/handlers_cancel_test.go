@@ -383,6 +383,159 @@ func TestApproveTaskResumesPausedTask(t *testing.T) {
 	}
 }
 
+// 验证普通用户可以审批自己拥有的 paused 任务。
+func TestApproveTaskOwnerCanApproveOwnPausedTask(t *testing.T) {
+	taskStore := store.NewInMemory()
+	seedTask(t, taskStore, "task-owner-paused", domain.TaskPaused, "task paused: approval required")
+	_, _, err := taskStore.UpdateMetadata("task-owner-paused", map[string]string{
+		metadataAgentRequiredToolKey:      "summarize_page",
+		metadataAgentRequiredToolInputKey: "https://example.com/report",
+		metadataAgentRequiredToolRiskKey:  "high",
+		metadataAgentRequiredReasonKey:    "high risk web fetch",
+		metadataAgentResumeStepKey:        "4",
+	})
+	if err != nil {
+		t.Fatalf("UpdateMetadata returned error: %v", err)
+	}
+
+	taskQueue := queue.NewInMemoryQueue(8)
+	router := NewRouter(NewHandler(taskStore, noopAgentClient{}, taskQueue, &recordingTaskCanceler{}))
+	body := strings.NewReader(`{
+		"reason": "approved in chat",
+		"approved_tool_call": {
+			"tool_name": "summarize_page",
+			"tool_input": "https://example.com/report",
+			"risk_level": "high",
+			"reason": "approved in chat",
+			"resume_step_index": 4
+		}
+	}`)
+	request := httptest.NewRequest(http.MethodPost, "/v1/tasks/task-owner-paused/approve", body)
+	request.Header.Set("Content-Type", "application/json")
+	attachSessionCookie(t, taskStore, request, "user-test", domain.UserRoleUser)
+	response := httptest.NewRecorder()
+
+	router.ServeHTTP(response, request)
+
+	if response.Code != http.StatusAccepted {
+		t.Fatalf("unexpected status: got %d want %d", response.Code, http.StatusAccepted)
+	}
+
+	storedTask, ok := taskStore.Get("task-owner-paused")
+	if !ok {
+		t.Fatal("task-owner-paused not found in store")
+	}
+	if storedTask.Status != domain.TaskQueued {
+		t.Fatalf("unexpected task status: got %q want %q", storedTask.Status, domain.TaskQueued)
+	}
+	if storedTask.Metadata[metadataAgentResumeRequestedByKey] != "user-test" {
+		t.Fatalf("unexpected resume requester: got %q", storedTask.Metadata[metadataAgentResumeRequestedByKey])
+	}
+
+	var approvedCall approvedToolCallRequest
+	if err := json.Unmarshal([]byte(storedTask.Metadata[metadataApprovedToolCallKey]), &approvedCall); err != nil {
+		t.Fatalf("approved tool call metadata is not valid JSON: %v", err)
+	}
+	if approvedCall.ToolName != "summarize_page" {
+		t.Fatalf("unexpected approved tool name: got %q", approvedCall.ToolName)
+	}
+	if approvedCall.ToolInput != "https://example.com/report" {
+		t.Fatalf("unexpected approved tool input: got %q", approvedCall.ToolInput)
+	}
+	if approvedCall.ResumeStepIndex != 4 {
+		t.Fatalf("unexpected approved resume step: got %d", approvedCall.ResumeStepIndex)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	queuedTaskID, dequeueErr := taskQueue.Dequeue(ctx)
+	if dequeueErr != nil {
+		t.Fatalf("Dequeue returned error: %v", dequeueErr)
+	}
+	if queuedTaskID != "task-owner-paused" {
+		t.Fatalf("unexpected queued task: got %q want %q", queuedTaskID, "task-owner-paused")
+	}
+}
+
+// 验证 admin 可以审批任意用户拥有的 paused 任务。
+func TestApproveTaskAdminCanApproveAnyPausedTask(t *testing.T) {
+	taskStore := store.NewInMemory()
+	seedTask(t, taskStore, "task-admin-paused", domain.TaskPaused, "task paused: approval required")
+	_, _, err := taskStore.UpdateMetadata("task-admin-paused", map[string]string{
+		metadataAgentRequiredToolKey:      "http_api",
+		metadataAgentRequiredToolInputKey: `{"url":"https://api.example.com/items"}`,
+		metadataAgentRequiredToolRiskKey:  "high",
+		metadataAgentResumeStepKey:        "2",
+	})
+	if err != nil {
+		t.Fatalf("UpdateMetadata returned error: %v", err)
+	}
+
+	router := NewRouter(NewHandler(taskStore, noopAgentClient{}, queue.NewInMemoryQueue(8), &recordingTaskCanceler{}))
+	request := httptest.NewRequest(http.MethodPost, "/v1/tasks/task-admin-paused/approve", nil)
+	attachSessionCookie(t, taskStore, request, "ops-admin", domain.UserRoleAdmin)
+	response := httptest.NewRecorder()
+
+	router.ServeHTTP(response, request)
+
+	if response.Code != http.StatusAccepted {
+		t.Fatalf("unexpected status: got %d want %d", response.Code, http.StatusAccepted)
+	}
+
+	storedTask, ok := taskStore.Get("task-admin-paused")
+	if !ok {
+		t.Fatal("task-admin-paused not found in store")
+	}
+	if storedTask.Status != domain.TaskQueued {
+		t.Fatalf("unexpected task status: got %q want %q", storedTask.Status, domain.TaskQueued)
+	}
+	if storedTask.Metadata[metadataAgentResumeRequestedByKey] != "ops-admin" {
+		t.Fatalf("unexpected resume requester: got %q", storedTask.Metadata[metadataAgentResumeRequestedByKey])
+	}
+}
+
+// 验证普通用户不能审批其他用户拥有的任务。
+func TestApproveTaskForbiddenForAnotherUser(t *testing.T) {
+	taskStore := store.NewInMemory()
+	seedTask(t, taskStore, "task-foreign-paused", domain.TaskPaused, "task paused: approval required")
+	_, _, err := taskStore.UpdateMetadata("task-foreign-paused", map[string]string{
+		metadataAgentRequiredToolKey:      "http_api",
+		metadataAgentRequiredToolInputKey: "https://example.com/api",
+		metadataAgentRequiredToolRiskKey:  "high",
+	})
+	if err != nil {
+		t.Fatalf("UpdateMetadata returned error: %v", err)
+	}
+
+	router := NewRouter(NewHandler(taskStore, noopAgentClient{}, queue.NewInMemoryQueue(8), &recordingTaskCanceler{}))
+	request := httptest.NewRequest(http.MethodPost, "/v1/tasks/task-foreign-paused/approve", nil)
+	attachSessionCookie(t, taskStore, request, "regular-user", domain.UserRoleUser)
+	response := httptest.NewRecorder()
+
+	router.ServeHTTP(response, request)
+
+	if response.Code != http.StatusForbidden {
+		t.Fatalf("unexpected status: got %d want %d", response.Code, http.StatusForbidden)
+	}
+
+	var payload map[string]string
+	decodeJSON(t, response, &payload)
+	if payload["error"] != "forbidden" {
+		t.Fatalf("unexpected error response: %#v", payload)
+	}
+
+	storedTask, ok := taskStore.Get("task-foreign-paused")
+	if !ok {
+		t.Fatal("task-foreign-paused not found in store")
+	}
+	if storedTask.Status != domain.TaskPaused {
+		t.Fatalf("task status should remain paused, got %q", storedTask.Status)
+	}
+	if storedTask.Metadata[metadataApprovalGrantedKey] != "" {
+		t.Fatalf("approval metadata should not be written, got %q", storedTask.Metadata[metadataApprovalGrantedKey])
+	}
+}
+
 // 验证未显式传 approved_tool_call 时，审批接口会从 paused metadata 还原精确工具调用审批。
 func TestApproveTaskWritesApprovedToolCallFromPauseMetadata(t *testing.T) {
 	taskStore := store.NewInMemory()

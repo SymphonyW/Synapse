@@ -18,6 +18,8 @@ export type AuthPayload = {
 
 export type TaskStatus = 'queued' | 'running' | 'paused' | 'completed' | 'failed' | 'canceled'
 
+export type TerminalTaskStatus = Extract<TaskStatus, 'completed' | 'failed' | 'canceled'>
+
 export type Task = {
   id: string
   user_id: string
@@ -73,8 +75,13 @@ export type StreamEvent = {
   token?: string
   trace_id?: string
   emitted_at_unix_ms?: number
-  status?: string
+  status?: TaskStatus
   task_id?: string
+}
+
+export type TerminalTaskEvent = {
+  taskID: string
+  status?: TerminalTaskStatus
 }
 
 export type StreamState = 'idle' | 'connecting' | 'live' | 'closed'
@@ -96,6 +103,23 @@ export type DeadLetterTask = {
 
 export type DeadLetterResponse = {
   items: DeadLetterTask[]
+  count: number
+}
+
+export type ToolCatalogItem = {
+  name: string
+  description: string
+  risk_level: 'low' | 'medium' | 'high' | 'critical' | string
+  requires_approval: boolean
+  provider_name: string
+  currently_disabled: boolean
+  allowed_for_role: boolean
+  selectable: boolean
+  disabled_reason?: string
+}
+
+export type ToolCatalogResponse = {
+  items: ToolCatalogItem[]
   count: number
 }
 

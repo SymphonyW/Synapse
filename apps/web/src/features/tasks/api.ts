@@ -5,6 +5,7 @@ import type {
   Task,
   TaskListResponse,
   TaskReplayListResponse,
+  ToolCatalogResponse,
 } from '../../shared/types/domain'
 import type { ReplayComparePayload } from '../trace/ReplayDiffPanel'
 
@@ -19,6 +20,10 @@ export function listTasks(limit: number, status?: string): Promise<TaskListRespo
 
 export function getTask(taskID: string): Promise<Task> {
   return apiRequest<Task>(`/v1/tasks/${taskID}`)
+}
+
+export function listToolCatalog(): Promise<ToolCatalogResponse> {
+  return apiRequest<ToolCatalogResponse>('/v1/tools/catalog')
 }
 
 export function createTask(payload: {

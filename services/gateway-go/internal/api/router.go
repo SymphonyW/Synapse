@@ -39,6 +39,7 @@ func NewRouter(handler *Handler) http.Handler {
 	mux.HandleFunc("POST /v1/memories", handler.WriteMemory)
 	mux.HandleFunc("GET /v1/memories/recall", handler.RecallMemory)
 	mux.HandleFunc("DELETE /v1/memories/{memoryID}", handler.DeleteMemory)
+	mux.HandleFunc("GET /v1/tools/catalog", handler.ListToolCatalog)
 	mux.HandleFunc("GET /v1/tasks", handler.ListTasks)
 	mux.HandleFunc("POST /v1/tasks", handler.CreateTask)
 	mux.HandleFunc("DELETE /v1/conversations/{conversationID}", handler.DeleteConversation)

@@ -73,10 +73,13 @@ export function AppHeader({
 
   return (
     <header className="topbar">
-      <div className="topbar-copy">
-        <p className="eyebrow">{title.eyebrow}</p>
-        <h1>{title.heading}</h1>
-        <p className="topbar-description">{title.description}</p>
+      <div className="topbar-brand">
+        <img className="brand-mark" src="/icon.png" alt="Synapse" />
+        <div className="topbar-copy">
+          <p className="eyebrow">{title.eyebrow}</p>
+          <h1>{title.heading}</h1>
+          <p className="topbar-description">{title.description}</p>
+        </div>
       </div>
       <div className="topbar-actions">
         <div className="account-pill">

@@ -74,17 +74,62 @@ export function AuthScreen({
   return (
     <div className="auth-shell">
       <section className="auth-hero">
-        <p className="eyebrow">{tr('Synapse 安全入口', 'Synapse Secure Access')}</p>
-        <h1>{tr('登录后进入控制台', 'Sign In To Continue')}</h1>
-        <p>
-          {tr(
-            '注册普通用户后可使用聊天端，管理员可进入运维台。',
-            'Register as a regular user for chat access, and sign in as admin for the ops console.',
-          )}
-        </p>
+        <div className="auth-brand-lockup">
+          <img className="auth-logo" src="/icon.png" alt="Synapse" />
+          <div>
+            <p className="eyebrow">Synapse</p>
+            <span>{tr('Agent 运行控制面', 'Agent Control Plane')}</span>
+          </div>
+        </div>
+
+        <div className="auth-hero-copy">
+          <span className="auth-kicker">{tr('任务、工具、审批与追踪', 'Tasks, tools, approvals, and traces')}</span>
+          <h1>{tr('把 Agent 执行过程纳入控制', 'Bring agent execution under control')}</h1>
+          <p>
+            {tr(
+              '从任务入队到工具审批，再到事件追踪和重放，所有关键状态都在同一个工作台里闭环。',
+              'From queueing and tool approvals to event traces and replay, every critical state stays inside one console.',
+            )}
+          </p>
+        </div>
+
+        <div className="auth-flow" aria-label={tr('运行链路', 'Execution flow')}>
+          <span>{tr('入队', 'Queue')}</span>
+          <i aria-hidden="true" />
+          <span>{tr('治理', 'Policy')}</span>
+          <i aria-hidden="true" />
+          <span>{tr('追踪', 'Trace')}</span>
+          <i aria-hidden="true" />
+          <span>{tr('恢复', 'Replay')}</span>
+        </div>
+
+        <div className="auth-capabilities" aria-label={tr('核心能力', 'Core capabilities')}>
+          <div>
+            <strong>{tr('可暂停', 'Pause')}</strong>
+            <span>{tr('高风险工具先审批', 'Approve risky tools first')}</span>
+          </div>
+          <div>
+            <strong>{tr('可观测', 'Observe')}</strong>
+            <span>{tr('SSE 事件持续落库', 'Persisted SSE event stream')}</span>
+          </div>
+          <div>
+            <strong>{tr('可恢复', 'Recover')}</strong>
+            <span>{tr('失败任务可重放', 'Replay failed tasks')}</span>
+          </div>
+        </div>
       </section>
 
       <section className="auth-panel">
+        <div className="auth-panel-head">
+          <span>{tr('安全入口', 'Secure Access')}</span>
+          <h2>{mode === 'login' ? tr('登录控制台', 'Sign in to console') : tr('创建账号', 'Create account')}</h2>
+          <p>
+            {mode === 'login'
+              ? tr('使用账号进入 Synapse 工作台。', 'Use your account to enter the Synapse workspace.')
+              : tr('注册后可进入用户端发起任务。', 'Register to start tasks from the client workspace.')}
+          </p>
+        </div>
+
         <div className="auth-tabs" role="tablist" aria-label={tr('身份操作', 'Authentication actions')}>
           <button
             className={mode === 'login' ? 'auth-tab active' : 'auth-tab'}

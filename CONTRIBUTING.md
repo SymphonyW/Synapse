@@ -18,7 +18,7 @@
 .\scripts\dev.ps1 -Task up
 ```
 
-更完整的启动说明见 [doc/02-部署与启动.md](doc/02-部署与启动.md)。
+更完整的启动说明见 [docs/02-部署与启动.md](docs/02-部署与启动.md)。
 
 ## 分支命名建议
 
@@ -65,9 +65,9 @@ Set-Location ..\..
 
 | 如果你改了 | 也请同步 |
 |---|---|
-| HTTP API、状态码、事件 | `doc/03-协议与通信.md`、`doc/05-接口验证手册.md`、相关功能文档 |
-| 环境变量、Compose、启动方式 | `README.md`、`doc/02-部署与启动.md` |
-| 工具治理、审批、记忆、评测 | `doc/20-ai-engine模块.md`、对应 `doc/4x` 功能文档 |
+| HTTP API、状态码、事件 | `docs/03-协议与通信.md`、`docs/05-接口验证手册.md`、相关功能文档 |
+| 环境变量、Compose、启动方式 | `README.md`、`docs/02-部署与启动.md` |
+| 工具治理、审批、记忆、评测 | `docs/20-ai-engine模块.md`、对应 `docs/4x` 功能文档 |
 | 面向新用户的关键体验 | 根 `README.md`、Demo 文档、截图资产位 |
 
 ## 提交 PR 前

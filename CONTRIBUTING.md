@@ -61,6 +61,60 @@ python -m app.benchmarks.live_benchmark --provider openai --dry-run-config-check
 Set-Location ..\..
 ```
 
+## CI Gate
+
+Run the same checks locally before opening a PR:
+
+```powershell
+# Gateway
+Set-Location services/gateway-go
+$unformatted = gofmt -l .
+if ($unformatted) { $unformatted; exit 1 }
+go vet ./...
+go test -race ./...
+Set-Location ..\..
+
+# AI Engine
+Set-Location services/ai-engine-py
+python -m unittest discover -s tests -p "test_*.py"
+python -m app.benchmarks.regression
+Set-Location ..\..
+
+# Web
+Set-Location apps/web
+npm ci
+npm run lint
+npm run build
+npm run test
+Set-Location ..\..
+
+# Proto
+.\scripts\dev.ps1 -Task proto
+# or on Unix-like shells:
+make proto
+git diff --exit-code
+
+# Docker smoke
+docker compose up --build -d
+bash scripts/ci-smoke.sh
+docker compose logs
+docker compose down -v
+```
+
+Before submitting a PR, run the checks for the modules you changed. If the PR touches shared proto, auth, task execution, or Compose wiring, run the full CI set above.
+
+CI job responsibilities:
+
+| Job | Responsibility |
+|---|---|
+| `gateway` | Checks Go formatting with `gofmt -l`, then runs `go vet ./...` and `go test -race ./...`. |
+| `ai-engine` | Installs Python dependencies, runs unittest discovery, and runs the Agent regression suite in mock mode. |
+| `web` | Runs `npm ci`, ESLint, production build, and Vitest in non-watch mode. |
+| `proto-check` | Runs the existing proto generation command and fails if `git diff --exit-code` or generated-file tracking checks find drift. |
+| `docker-smoke` | Builds the Compose stack in mock mode, checks `/healthz`, registers/logs in, creates a task, reads SSE events, and verifies the task completes. |
+
+Mock regression is deterministic and must not use real model API keys. Live benchmark is for provider integration and quality checks; it may require provider credentials and should stay outside required PR CI unless explicitly requested.
+
 ## 文档同步原则
 
 | 如果你改了 | 也请同步 |

@@ -53,7 +53,15 @@ venv/
 
 # 生成代码
 services/gateway-go/internal/gen/
+!services/gateway-go/internal/gen/
+!services/gateway-go/internal/gen/synapse/
+!services/gateway-go/internal/gen/synapse/v1/
+!services/gateway-go/internal/gen/synapse/v1/*.go
 services/ai-engine-py/synapse/
+!services/ai-engine-py/synapse/
+!services/ai-engine-py/synapse/__init__.py
+!services/ai-engine-py/synapse/v1/
+!services/ai-engine-py/synapse/v1/*.py
 
 # 临时文件
 *.tmp

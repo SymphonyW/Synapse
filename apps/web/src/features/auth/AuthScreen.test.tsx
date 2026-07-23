@@ -19,7 +19,7 @@ describe('AuthScreen', () => {
       />,
     )
 
-    expect(screen.getByRole('heading', { name: 'Sign In To Continue' })).toBeInTheDocument()
+    expect(screen.getByRole('heading', { name: 'Sign in to console' })).toBeInTheDocument()
     expect(screen.getByLabelText('Username')).toBeInTheDocument()
   })
 

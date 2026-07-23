@@ -1,0 +1,45 @@
+versions:
+  go: services/gateway-go/go.mod
+  python: "3.12"
+  node: "22"
+  protoc-gen-go: "1.36.11"
+  protoc-gen-go-grpc: "1.5.1"
+  grpcio-tools: "1.76.0"
+
+commands:
+  gateway:
+    workdir: services/gateway-go
+    steps:
+      - gofmt -l .
+      - go vet ./...
+      - go test -race ./...
+  ai-engine:
+    workdir: services/ai-engine-py
+    env:
+      SYNAPSE_MODEL_PROVIDER: mock
+      SYNAPSE_MEMORY_BACKEND: file
+    steps:
+      - python -m pip install -r requirements.txt
+      - python -m unittest discover -s tests -p "test_*.py"
+      - python -m app.benchmarks.regression
+  web:
+    workdir: apps/web
+    steps:
+      - npm ci
+      - npm run lint
+      - npm run build
+      - npm run test
+  proto-check:
+    workdir: .
+    steps:
+      - make proto
+      - git diff --exit-code
+  docker-smoke:
+    workdir: .
+    env:
+      SYNAPSE_MODEL_PROVIDER: mock
+    steps:
+      - docker compose up --build -d
+      - bash scripts/ci-smoke.sh
+      - docker compose logs --no-color
+      - docker compose down -v

@@ -3,8 +3,9 @@ import unittest
 from unittest.mock import Mock, patch
 
 from app.config import load_config
-from app.main import _build_memory_store
+from app.main import _build_memory_store, _build_model_provider, _model_provider_display_alias
 from app.memory import FileMemoryStore
+from app.providers import MockModelProvider, OpenAICompatibleProvider
 
 
 class MemoryBackendFactoryTests(unittest.TestCase):
@@ -57,6 +58,59 @@ class MemoryBackendFactoryTests(unittest.TestCase):
             top_k=24,
             max_entries_per_user=80,
         )
+
+    def test_builds_mock_model_provider_by_default(self) -> None:
+        with patch.dict(os.environ, {}, clear=True):
+            config = load_config()
+
+        provider = _build_model_provider(config)
+
+        self.assertIsInstance(provider, MockModelProvider)
+        self.assertEqual(_model_provider_display_alias(config), "")
+
+    def test_builds_openai_compatible_provider_from_existing_env_names(self) -> None:
+        with patch.dict(
+            os.environ,
+            {
+                "SYNAPSE_MODEL_PROVIDER": "openai",
+                "SYNAPSE_OPENAI_API_KEY": "test-key",
+                "SYNAPSE_OPENAI_BASE_URL": "https://provider.example/v1/",
+                "SYNAPSE_OPENAI_MODEL": "test-model",
+                "SYNAPSE_OPENAI_TEMPERATURE": "0.4",
+                "SYNAPSE_OPENAI_MAX_TOKENS": "128",
+                "SYNAPSE_OPENAI_HTTP_TIMEOUT_SECONDS": "9",
+                "SYNAPSE_OPENAI_MAX_RETRIES": "2",
+                "SYNAPSE_OPENAI_RETRY_BACKOFF_SECONDS": "0.5",
+            },
+            clear=True,
+        ):
+            config = load_config()
+
+        provider = _build_model_provider(config)
+
+        self.assertIsInstance(provider, OpenAICompatibleProvider)
+        self.assertEqual(
+            provider.endpoint,
+            "https://provider.example/v1/chat/completions",
+        )
+
+    def test_gemini_and_zhipu_aliases_still_display_as_aliases(self) -> None:
+        for alias in ("gemini", "zhipu"):
+            with self.subTest(alias=alias):
+                with patch.dict(
+                    os.environ,
+                    {
+                        "SYNAPSE_MODEL_PROVIDER": alias,
+                        "SYNAPSE_OPENAI_API_KEY": "test-key",
+                    },
+                    clear=True,
+                ):
+                    config = load_config()
+
+                provider = _build_model_provider(config)
+
+                self.assertIsInstance(provider, OpenAICompatibleProvider)
+                self.assertEqual(_model_provider_display_alias(config), alias)
 
 
 if __name__ == "__main__":

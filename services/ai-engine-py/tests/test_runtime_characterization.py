@@ -445,6 +445,24 @@ class RuntimeCharacterizationTests(unittest.TestCase):
         self.assertIn("Model service is temporarily unavailable", token_text(events))
         self.assertEqual(event_phases(events)[-1], "evaluate")
 
+    def test_runtime_accepts_injected_model_provider(self) -> None:
+        provider = InjectedOpenAIProvider()
+        runtime = AgentRuntime(
+            model_provider=provider,
+            model_provider_alias="gemini",
+            agent_tool_audit_log_file="",
+        )
+
+        text = asyncio.run(_collect_prompt_text(runtime, "hello injected provider"))
+
+        self.assertEqual(runtime.model_provider, "openai")
+        self.assertEqual(runtime.model_provider_display, "gemini")
+        self.assertEqual(text, "injected stream")
+        self.assertEqual(
+            provider.messages_seen[0][-1],
+            {"role": "user", "content": "hello injected provider"},
+        )
+
     def test_openai_empty_response_is_explicit(self) -> None:
         runtime = ScriptedOpenAIRuntime(
             rounds=[[RuntimeError("stream failed before first token")]],
@@ -583,8 +601,8 @@ class RuntimeCharacterizationTests(unittest.TestCase):
                         }
                     )
 
-                with patch("app.runtime.urllib_request.urlopen", fake_urlopen), patch(
-                    "app.runtime.time.sleep"
+                with patch("app.providers.openai_compatible.urllib_request.urlopen", fake_urlopen), patch(
+                    "app.providers.openai_compatible.time.sleep"
                 ) as sleep_mock:
                     result = runtime._request_openai_completion_result("hello")
 
@@ -625,6 +643,30 @@ class ExplodingRuntime(AgentRuntime):
         raise RuntimeError("controlled runtime failure")
         if False:
             yield RuntimeStreamItem(kind="token", token="")
+
+
+class InjectedOpenAIProvider:
+    provider_name = "openai"
+
+    def __init__(self) -> None:
+        self.messages_seen: list[list[dict[str, str]]] = []
+
+    async def stream(
+        self,
+        messages: list[dict[str, str]],
+        *,
+        long_form: bool = False,
+    ):
+        _ = long_form
+        self.messages_seen.append(messages)
+        yield OpenAIStreamItem(content="injected stream")
+
+    async def complete(
+        self,
+        messages: list[dict[str, str]],
+    ) -> OpenAICompletionResult:
+        self.messages_seen.append(messages)
+        return OpenAICompletionResult(content="injected completion")
 
 
 class _JSONResponse:
@@ -675,6 +717,13 @@ async def _collect_service_events(
     async for event in service.SubmitTask(request, None):
         events.append(event)
     return events
+
+
+async def _collect_prompt_text(runtime: AgentRuntime, prompt: str) -> str:
+    chunks: list[str] = []
+    async for chunk in runtime.run_prompt(prompt):
+        chunks.append(chunk)
+    return "".join(chunks)
 
 
 def _service_infos(events: list[agent_pb2.AgentEvent]) -> list[dict]:

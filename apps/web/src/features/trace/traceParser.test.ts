@@ -24,6 +24,19 @@ const info = (
   }),
 })
 
+const typedInfo = (
+  eventID: number,
+  eventName: string,
+  payload: Record<string, unknown>,
+): TraceRawEvent => ({
+  event_id: eventID,
+  type: 'info',
+  emitted_at_unix_ms: 1_700_000_000_000 + eventID,
+  schema_version: 'synapse.agent.event.v2',
+  event_name: eventName,
+  payload,
+})
+
 describe('parseTrace', () => {
   it('groups plan, steps, tools, approval, replan, memory and evaluation', () => {
     const trace = parseTrace(
@@ -145,5 +158,87 @@ describe('parseTrace', () => {
     expect(trace.steps[0]?.toolCalls[0]?.toolName).toBe('calculator')
     expect(trace.parseErrors).toHaveLength(1)
     expect(trace.diagnosis.lastFailureReason).toBe('task failed unexpectedly')
+  })
+
+  it('parses v2 typed agent events without legacy message JSON', () => {
+    const trace = parseTrace(
+      [
+        typedInfo(1, 'plan', { step_count: 1, steps: ['calculate'] }),
+        typedInfo(2, 'memory_recall', {
+          query: 'previous calculation',
+          hit_count: 1,
+          hits: [
+            {
+              memory_id: 'memory-1',
+              summary: 'calculator was used',
+              content_preview: 'calculator result',
+              source_task_id: 'task-0',
+              importance: 0.8,
+              score: 0.7,
+              matched_terms: ['calculator'],
+            },
+          ],
+        }),
+        typedInfo(3, 'tool_finished', {
+          step_index: 1,
+          objective: 'calculate',
+          tool: 'calculator',
+          tool_name: 'calculator',
+          input_preview: '8 * 9',
+          output_preview: 'calculator result: 72',
+          duration_ms: 6,
+          ok: true,
+        }),
+        typedInfo(4, 'evaluate', {
+          estimated_success: 1,
+          objective_completion: 1,
+          tool_success_rate: 1,
+          blocked_actions: 0,
+        }),
+      ],
+      task,
+    )
+
+    expect(trace.parseErrors).toHaveLength(0)
+    expect(trace.plan?.steps).toEqual(['calculate'])
+    expect(trace.memoryRecall?.hits[0]?.memoryId).toBe('memory-1')
+    expect(trace.steps[0]?.toolCalls[0]?.inputPreview).toBe('8 * 9')
+    expect(trace.steps[0]?.toolCalls[0]?.outputPreview).toBe('calculator result: 72')
+    expect(trace.evaluation?.toolSuccessRate).toBe(1)
+  })
+
+  it('parses mixed v1 and v2 tool events without duplicating the tool call', () => {
+    const trace = parseTrace(
+      [
+        info(1, 'tool_selected', {
+          step_index: 1,
+          objective: 'calculate',
+          tool: 'calculator',
+          tool_input: '8 * 9',
+        }),
+        typedInfo(2, 'tool_started', {
+          step_index: 1,
+          objective: 'calculate',
+          tool: 'calculator',
+          tool_name: 'calculator',
+          input_preview: '8 * 9',
+        }),
+        typedInfo(3, 'tool_finished', {
+          step_index: 1,
+          objective: 'calculate',
+          tool: 'calculator',
+          tool_name: 'calculator',
+          input_preview: '8 * 9',
+          output_preview: 'calculator result: 72',
+          ok: true,
+        }),
+      ],
+      task,
+    )
+
+    expect(trace.steps).toHaveLength(1)
+    expect(trace.steps[0]?.toolCalls).toHaveLength(1)
+    expect(trace.steps[0]?.toolCalls[0]?.status).toBe('finished')
+    expect(trace.steps[0]?.toolCalls[0]?.outputPreview).toBe('calculator result: 72')
   })
 })

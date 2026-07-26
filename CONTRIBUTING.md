@@ -115,6 +115,19 @@ CI job responsibilities:
 
 Mock regression is deterministic and must not use real model API keys. Live benchmark is for provider integration and quality checks; it may require provider credentials and should stay outside required PR CI unless explicitly requested.
 
+## AgentEvent V2 Migration
+
+Agent runtime info events are migrating from legacy JSON-in-`message` to typed protobuf payloads:
+
+| Stage | Behavior |
+|---|---|
+| 1 | AI Engine double-writes typed `AgentEvent` payloads and the legacy JSON `message`. |
+| 2 | Gateway reads typed payloads first, falls back to legacy JSON, and persists structured `payload` plus `schema_version`. |
+| 3 | Web reads `schema_version`, `event_name`, and `payload` first, then falls back to `parseAgentInfoEnvelope(message)` for historical V1 events. |
+| 4 | Legacy removal is a future compatibility decision and must not happen in this phase. |
+
+When changing Agent event fields, update `proto/synapse/v1/agent.proto`, regenerate Go/Python code, keep legacy JSON fields compatible, and run the Python, Gateway, Web, and proto checks listed above.
+
 ## 文档同步原则
 
 | 如果你改了 | 也请同步 |

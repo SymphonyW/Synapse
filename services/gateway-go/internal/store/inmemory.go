@@ -1,6 +1,7 @@
 package store
 
 import (
+	"encoding/json"
 	"errors"
 	"sort"
 	"strings"
@@ -582,7 +583,22 @@ func cloneToolPolicy(policy domain.ToolPolicy) domain.ToolPolicy {
 	return copyPolicy
 }
 
-// cloneEvent 目前事件是值类型，直接返回即可；保留该函数便于未来扩展。
 func cloneEvent(event domain.TaskEvent) domain.TaskEvent {
-	return event
+	copyEvent := event
+	if event.Payload == nil {
+		return copyEvent
+	}
+
+	raw, err := json.Marshal(event.Payload)
+	if err != nil {
+		copyEvent.Payload = map[string]any{}
+		return copyEvent
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(raw, &payload); err != nil {
+		copyEvent.Payload = map[string]any{}
+		return copyEvent
+	}
+	copyEvent.Payload = payload
+	return copyEvent
 }

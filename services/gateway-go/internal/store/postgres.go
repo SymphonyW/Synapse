@@ -395,17 +395,27 @@ func (s *PostgresStore) AppendEvent(taskID string, event domain.TaskEvent) (doma
 	if event.EmittedAtUnixMS == 0 {
 		event.EmittedAtUnixMS = time.Now().UTC().UnixMilli()
 	}
+	if event.Payload == nil {
+		event.Payload = map[string]any{}
+	}
+	payloadJSON, err := json.Marshal(event.Payload)
+	if err != nil {
+		return domain.TaskEvent{}, err
+	}
 
 	row := s.db.QueryRowContext(
 		ctx,
-		`INSERT INTO task_events (task_id, event_type, message, token, trace_id, emitted_at_unix_ms)
-		 VALUES ($1, $2, $3, $4, $5, $6)
+		`INSERT INTO task_events (task_id, event_type, message, token, trace_id, schema_version, event_name, payload, emitted_at_unix_ms)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
 		 RETURNING id, created_at`,
 		taskID,
 		event.Type,
 		event.Message,
 		event.Token,
 		event.TraceID,
+		event.SchemaVersion,
+		event.EventName,
+		payloadJSON,
 		event.EmittedAtUnixMS,
 	)
 
@@ -433,7 +443,7 @@ func (s *PostgresStore) ListEvents(taskID string, afterEventID int64, limit int)
 
 	rows, err := s.db.QueryContext(
 		ctx,
-		`SELECT id, task_id, event_type, message, token, trace_id, emitted_at_unix_ms, created_at
+		`SELECT id, task_id, event_type, message, token, trace_id, schema_version, event_name, payload, emitted_at_unix_ms, created_at
 		 FROM task_events
 		 WHERE task_id = $1 AND id > $2
 		 ORDER BY id ASC
@@ -450,6 +460,7 @@ func (s *PostgresStore) ListEvents(taskID string, afterEventID int64, limit int)
 	events := make([]domain.TaskEvent, 0)
 	for rows.Next() {
 		var event domain.TaskEvent
+		var payloadRaw []byte
 		if err := rows.Scan(
 			&event.ID,
 			&event.TaskID,
@@ -457,10 +468,18 @@ func (s *PostgresStore) ListEvents(taskID string, afterEventID int64, limit int)
 			&event.Message,
 			&event.Token,
 			&event.TraceID,
+			&event.SchemaVersion,
+			&event.EventName,
+			&payloadRaw,
 			&event.EmittedAtUnixMS,
 			&event.CreatedAt,
 		); err != nil {
 			return nil, err
+		}
+		if len(payloadRaw) > 0 {
+			if err := json.Unmarshal(payloadRaw, &event.Payload); err != nil {
+				return nil, err
+			}
 		}
 
 		events = append(events, event)
@@ -893,9 +912,16 @@ func (s *PostgresStore) ensureSchema(ctx context.Context) error {
 		 message TEXT NOT NULL DEFAULT '',
 		 token TEXT NOT NULL DEFAULT '',
 		 trace_id TEXT NOT NULL DEFAULT '',
+		 schema_version TEXT NOT NULL DEFAULT '',
+		 event_name TEXT NOT NULL DEFAULT '',
+		 payload JSONB NOT NULL DEFAULT '{}'::jsonb,
 		 emitted_at_unix_ms BIGINT NOT NULL,
 		 created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 		);
+
+		ALTER TABLE task_events ADD COLUMN IF NOT EXISTS schema_version TEXT NOT NULL DEFAULT '';
+		ALTER TABLE task_events ADD COLUMN IF NOT EXISTS event_name TEXT NOT NULL DEFAULT '';
+		ALTER TABLE task_events ADD COLUMN IF NOT EXISTS payload JSONB NOT NULL DEFAULT '{}'::jsonb;
 
 		CREATE TABLE IF NOT EXISTS dead_letter_tasks (
 		 task_id TEXT PRIMARY KEY REFERENCES tasks(id) ON DELETE CASCADE,

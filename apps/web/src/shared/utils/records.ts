@@ -1,4 +1,4 @@
-import type { AgentInfoEnvelope, SourceLink } from '../types/domain'
+import type { AgentInfoEnvelope, SourceLink, StreamEvent } from '../types/domain'
 
 export function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
@@ -61,6 +61,26 @@ export function parseAgentInfoEnvelope(message?: string): AgentInfoEnvelope | nu
   } catch {
     return null
   }
+}
+
+export function parseAgentInfoEvent(event: StreamEvent): AgentInfoEnvelope | null {
+  if (
+    typeof event.schema_version === 'string' &&
+    event.schema_version.trim() !== '' &&
+    typeof event.event_name === 'string' &&
+    event.event_name.trim() !== '' &&
+    (event.payload === undefined || isRecord(event.payload))
+  ) {
+    return {
+      schema: event.schema_version,
+      schema_version: event.schema_version,
+      agent_event: event.event_name,
+      event_name: event.event_name,
+      payload: event.payload,
+    }
+  }
+
+  return parseAgentInfoEnvelope(event.message)
 }
 
 export function extractURLCandidates(text: string): string[] {

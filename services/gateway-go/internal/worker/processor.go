@@ -2,7 +2,6 @@ package worker
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -13,6 +12,7 @@ import (
 	"time"
 
 	"github.com/synapse/synapse/services/gateway-go/internal/agent"
+	"github.com/synapse/synapse/services/gateway-go/internal/agentinfo"
 	"github.com/synapse/synapse/services/gateway-go/internal/domain"
 	"github.com/synapse/synapse/services/gateway-go/internal/queue"
 	"github.com/synapse/synapse/services/gateway-go/internal/store"
@@ -217,13 +217,24 @@ func (p *TaskProcessor) processTask(parentCtx context.Context, taskID string) er
 
 		// 将 gRPC 枚举名转换为 HTTP/SSE 层使用的小写事件名。
 		normalizedType := normalizeEventType(event.Type.String())
-		persistedEvent, persistErr := p.taskStore.AppendEvent(taskID, domain.TaskEvent{
+		info, diagnostics, hasInfo := agentinfo.FromProtoOrLegacy(event)
+		for _, diagnostic := range diagnostics {
+			log.Printf("agent info typed/legacy conflict task_id=%s %s", taskID, diagnostic)
+		}
+		taskEvent := domain.TaskEvent{
 			Type:            normalizedType,
 			Message:         event.Message,
 			Token:           event.Token,
 			TraceID:         event.TraceId,
 			EmittedAtUnixMS: event.EmittedAtUnixMs,
-		})
+		}
+		if hasInfo {
+			taskEvent.SchemaVersion = info.SchemaVersion
+			taskEvent.EventName = info.EventName
+			taskEvent.Payload = info.Payload
+		}
+
+		persistedEvent, persistErr := p.taskStore.AppendEvent(taskID, taskEvent)
 		if persistErr != nil {
 			if errors.Is(persistErr, store.ErrTaskNotFound) {
 				// 会话删除可能与流式回写并发发生，任务已不存在时无需重试。
@@ -234,7 +245,7 @@ func (p *TaskProcessor) processTask(parentCtx context.Context, taskID string) er
 
 		// 某些事件类型会驱动任务状态迁移。
 		if persistedEvent.Type == "info" {
-			pauseMessage, metadataUpdates, shouldPause := parseApprovalRequiredInfo(persistedEvent.Message)
+			pauseMessage, metadataUpdates, shouldPause := parseApprovalRequiredEvent(persistedEvent)
 			if shouldPause {
 				if _, _, updateErr := p.taskStore.UpdateMetadata(taskID, metadataUpdates); updateErr != nil {
 					return updateErr
@@ -272,26 +283,32 @@ func (p *TaskProcessor) processTask(parentCtx context.Context, taskID string) er
 	}
 }
 
-type agentInfoEnvelope struct {
-	AgentEvent string         `json:"agent_event"`
-	Payload    map[string]any `json:"payload"`
-}
-
 // parseApprovalRequiredInfo 提取审批暂停信息并返回 metadata 更新补丁。
 // 这里不解释或改写原始 info 事件，只把恢复所需的 tool call 字段旁路持久化，
 // 让 API 审批接口后续能生成 approved_tool_call 并从暂停步骤继续执行。
 func parseApprovalRequiredInfo(message string) (string, map[string]string, bool) {
-	trimmed := strings.TrimSpace(message)
-	if trimmed == "" {
+	info, ok := agentinfo.FromLegacyMessage(message)
+	if !ok {
 		return "", nil, false
 	}
 
-	var payload agentInfoEnvelope
-	if err := json.Unmarshal([]byte(trimmed), &payload); err != nil {
-		return "", nil, false
+	return parseApprovalRequiredAgentInfo(info)
+}
+
+func parseApprovalRequiredEvent(event domain.TaskEvent) (string, map[string]string, bool) {
+	if event.EventName == "approval_required" && event.Payload != nil {
+		return parseApprovalRequiredAgentInfo(agentinfo.AgentInfo{
+			SchemaVersion: event.SchemaVersion,
+			EventName:     event.EventName,
+			Payload:       event.Payload,
+		})
 	}
 
-	if strings.TrimSpace(payload.AgentEvent) != "approval_required" {
+	return parseApprovalRequiredInfo(event.Message)
+}
+
+func parseApprovalRequiredAgentInfo(info agentinfo.AgentInfo) (string, map[string]string, bool) {
+	if strings.TrimSpace(info.EventName) != "approval_required" {
 		return "", nil, false
 	}
 
@@ -300,54 +317,12 @@ func parseApprovalRequiredInfo(message string) (string, map[string]string, bool)
 	riskLevel := ""
 	approvalReason := ""
 	stepIndex := 0
-	if payload.Payload != nil {
-		if rawTool, ok := payload.Payload["tool"]; ok {
-			if toolValue, castOK := rawTool.(string); castOK {
-				tool = strings.TrimSpace(toolValue)
-			}
-		}
-		if rawToolName, ok := payload.Payload["tool_name"]; ok && tool == "" {
-			if toolValue, castOK := rawToolName.(string); castOK {
-				tool = strings.TrimSpace(toolValue)
-			}
-		}
-
-		if rawToolInput, ok := payload.Payload["tool_input"]; ok {
-			if inputValue, castOK := rawToolInput.(string); castOK {
-				toolInput = strings.TrimSpace(inputValue)
-			}
-		}
-
-		if rawRisk, ok := payload.Payload["risk_level"]; ok {
-			if riskValue, castOK := rawRisk.(string); castOK {
-				riskLevel = strings.TrimSpace(riskValue)
-			}
-		}
-
-		if rawReason, ok := payload.Payload["approval_reason"]; ok {
-			if reasonValue, castOK := rawReason.(string); castOK {
-				approvalReason = strings.TrimSpace(reasonValue)
-			}
-		}
-		if approvalReason == "" {
-			if rawReason, ok := payload.Payload["reason"]; ok {
-				if reasonValue, castOK := rawReason.(string); castOK {
-					approvalReason = strings.TrimSpace(reasonValue)
-				}
-			}
-		}
-
-		if rawStep, ok := payload.Payload["resume_step_index"]; ok {
-			switch value := rawStep.(type) {
-			case float64:
-				stepIndex = int(value)
-			case string:
-				parsed, parseErr := strconv.Atoi(strings.TrimSpace(value))
-				if parseErr == nil {
-					stepIndex = parsed
-				}
-			}
-		}
+	if info.Payload != nil {
+		tool = payloadString(info.Payload, "tool", "tool_name")
+		toolInput = payloadString(info.Payload, "tool_input")
+		riskLevel = payloadString(info.Payload, "risk_level")
+		approvalReason = payloadString(info.Payload, "approval_reason", "reason")
+		stepIndex = payloadInt(info.Payload, "resume_step_index")
 	}
 
 	updates := map[string]string{
@@ -375,6 +350,45 @@ func parseApprovalRequiredInfo(message string) (string, map[string]string, bool)
 	}
 
 	return pauseMessage, updates, true
+}
+
+func payloadString(payload map[string]any, keys ...string) string {
+	for _, key := range keys {
+		raw, ok := payload[key]
+		if !ok {
+			continue
+		}
+		value := strings.TrimSpace(fmt.Sprint(raw))
+		if value != "" {
+			return value
+		}
+	}
+	return ""
+}
+
+func payloadInt(payload map[string]any, keys ...string) int {
+	for _, key := range keys {
+		raw, ok := payload[key]
+		if !ok {
+			continue
+		}
+		switch value := raw.(type) {
+		case int:
+			return value
+		case int32:
+			return int(value)
+		case int64:
+			return int(value)
+		case float64:
+			return int(value)
+		case string:
+			parsed, err := strconv.Atoi(strings.TrimSpace(value))
+			if err == nil {
+				return parsed
+			}
+		}
+	}
+	return 0
 }
 
 // registerActive 记录当前活跃任务，供取消接口定位。

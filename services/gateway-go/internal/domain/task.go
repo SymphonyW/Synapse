@@ -35,14 +35,17 @@ type Task struct {
 
 // TaskEvent 是任务执行过程中的增量事件，主要用于 SSE 推送与审计。
 type TaskEvent struct {
-	ID              int64     `json:"id"`
-	TaskID          string    `json:"task_id"`
-	Type            string    `json:"type"`
-	Message         string    `json:"message,omitempty"`
-	Token           string    `json:"token,omitempty"`
-	TraceID         string    `json:"trace_id,omitempty"`
-	EmittedAtUnixMS int64     `json:"emitted_at_unix_ms"`
-	CreatedAt       time.Time `json:"created_at"`
+	ID              int64          `json:"id"`
+	TaskID          string         `json:"task_id"`
+	Type            string         `json:"type"`
+	Message         string         `json:"message,omitempty"`
+	Token           string         `json:"token,omitempty"`
+	TraceID         string         `json:"trace_id,omitempty"`
+	SchemaVersion   string         `json:"schema_version,omitempty"`
+	EventName       string         `json:"event_name,omitempty"`
+	Payload         map[string]any `json:"payload,omitempty"`
+	EmittedAtUnixMS int64          `json:"emitted_at_unix_ms"`
+	CreatedAt       time.Time      `json:"created_at"`
 }
 
 // DeadLetterTask 记录重试耗尽后进入死信队列的任务信息。

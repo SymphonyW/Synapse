@@ -2,6 +2,7 @@ import time
 import uuid
 from typing import AsyncIterator
 
+from app.events import apply_typed_payload, parse_legacy_info_event
 from app.runtime import AgentRuntime
 from synapse.v1 import agent_pb2, agent_pb2_grpc
 
@@ -121,22 +122,18 @@ class AgentRuntimeService(agent_pb2_grpc.AgentRuntimeServicer):
                     continue
 
                 if runtime_event.kind == "info":
-                    yield agent_pb2.AgentEvent(
-                        type=agent_pb2.AGENT_EVENT_TYPE_INFO,
+                    yield _runtime_info_to_proto(
                         message=runtime_event.message,
                         trace_id=trace_id,
-                        emitted_at_unix_ms=int(time.time() * 1000),
                     )
                     continue
 
                 if runtime_event.kind == "pause":
                     paused = True
                     if runtime_event.message:
-                        yield agent_pb2.AgentEvent(
-                            type=agent_pb2.AGENT_EVENT_TYPE_INFO,
+                        yield _runtime_info_to_proto(
                             message=runtime_event.message,
                             trace_id=trace_id,
-                            emitted_at_unix_ms=int(time.time() * 1000),
                         )
                     break
 
@@ -158,6 +155,19 @@ class AgentRuntimeService(agent_pb2_grpc.AgentRuntimeServicer):
                 trace_id=trace_id,
                 emitted_at_unix_ms=int(time.time() * 1000),
             )
+
+
+def _runtime_info_to_proto(message: str, trace_id: str) -> agent_pb2.AgentEvent:
+    event = agent_pb2.AgentEvent(
+        type=agent_pb2.AGENT_EVENT_TYPE_INFO,
+        message=message,
+        trace_id=trace_id,
+        emitted_at_unix_ms=int(time.time() * 1000),
+    )
+    info_event = parse_legacy_info_event(message)
+    if info_event is not None:
+        apply_typed_payload(event, info_event)
+    return event
 
 
 def _memory_record_to_proto(record: dict) -> agent_pb2.MemoryRecord:

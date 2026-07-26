@@ -1,4 +1,5 @@
 AGENT_INFO_SCHEMA = "synapse.agent.info.v1"
+AGENT_EVENT_V2_SCHEMA = "synapse.agent.event.v2"
 
 LEGACY_AGENT_INFO_EVENT_TYPES = frozenset(
     {

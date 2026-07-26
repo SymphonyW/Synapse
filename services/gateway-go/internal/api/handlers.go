@@ -857,6 +857,15 @@ func (h *Handler) StreamTaskEvents(w http.ResponseWriter, r *http.Request) {
 				"trace_id":           event.TraceID,
 				"emitted_at_unix_ms": event.EmittedAtUnixMS,
 			}
+			if event.SchemaVersion != "" {
+				payload["schema_version"] = event.SchemaVersion
+			}
+			if event.EventName != "" {
+				payload["event_name"] = event.EventName
+			}
+			if len(event.Payload) > 0 {
+				payload["payload"] = event.Payload
+			}
 
 			if err := writeSSE(w, event.Type, payload); err != nil {
 				return

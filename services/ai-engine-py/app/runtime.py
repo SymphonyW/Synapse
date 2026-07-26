@@ -13,6 +13,12 @@ from urllib import error as urllib_error
 from urllib import parse as urllib_parse
 from urllib import request as urllib_request
 
+from app.events import (
+    AGENT_INFO_SCHEMA,
+    AgentEventFactory,
+    AgentInfoEvent,
+    serialize_legacy_info_event,
+)
 from app.memory import FileMemoryStore, MemoryRecord, MemoryStore
 from app.providers import (
     MODEL_MESSAGES_METADATA_KEY,
@@ -44,7 +50,6 @@ METADATA_AGENT_REQUIRED_TOOL_KEY = "agent_required_tool"
 METADATA_AGENT_REQUIRED_TOOL_INPUT_KEY = "agent_required_tool_input"
 METADATA_AGENT_RESUME_REQUESTED_BY_KEY = "agent_resume_requested_by"
 METADATA_CLIENT_USER_MESSAGE_KEY = "user_message"
-AGENT_INFO_SCHEMA = "synapse.agent.info.v1"
 BROWSER_MAX_CONTENT_BYTES = 128 * 1024
 BROWSER_OUTPUT_TEXT_LIMIT = 2400
 BROWSER_USER_AGENT = "synapse-agent-browser/1.0"
@@ -269,6 +274,7 @@ class AgentRuntime:
         self._agent_max_plan_steps = max(1, agent_max_plan_steps)
         self._agent_require_approval_for_high_risk = agent_require_approval_for_high_risk
         self._agent_memory_recall_limit = max(1, agent_memory_recall_limit)
+        self._agent_event_factory = AgentEventFactory()
         self._agent_memory_store: MemoryStore = agent_memory_store or FileMemoryStore(
             file_path=agent_memory_file,
             max_entries_per_user=agent_memory_max_entries_per_user,
@@ -428,36 +434,20 @@ class AgentRuntime:
         yield RuntimeStreamItem(
             kind="info",
             message=self._encode_agent_info(
-                phase="perceive",
-                payload={
-                    "task_id": task_id,
-                    "short_context_count": len(short_context),
-                    "recalled_memory_count": len(recalled_memories),
-                },
+                self._agent_event_factory.perceive(
+                    task_id=task_id,
+                    short_context_count=len(short_context),
+                    recalled_memory_count=len(recalled_memories),
+                )
             ),
         )
         yield RuntimeStreamItem(
             kind="info",
             message=self._encode_agent_info(
-                phase="memory_recall",
-                payload={
-                    "query": normalized_prompt[:240],
-                    "hit_count": len(recalled_memories),
-                    "hits": [
-                        {
-                            "memory_id": item.get("memory_id", ""),
-                            "summary": str(item.get("summary", ""))[:240],
-                            "content_preview": str(item.get("content", ""))[:240],
-                            "source_task_id": item.get("source_task_id", ""),
-                            "importance": item.get("importance", 0.0),
-                            "created_at": item.get("created_at", 0),
-                            "score": item.get("score", 0.0),
-                            "matched_terms": item.get("matched_terms", []),
-                        }
-                        for item in recalled_memories
-                    ],
-                },
-                display_message=f"Memory recall: {len(recalled_memories)} hit(s)",
+                self._agent_event_factory.memory_recall(
+                    query=normalized_prompt,
+                    hits=recalled_memories,
+                )
             ),
         )
 
@@ -465,11 +455,9 @@ class AgentRuntime:
         yield RuntimeStreamItem(
             kind="info",
             message=self._encode_agent_info(
-                phase="plan",
-                payload={
-                    "step_count": len(plan_steps),
-                    "steps": [step.objective for step in plan_steps],
-                },
+                self._agent_event_factory.plan(
+                    steps=[step.objective for step in plan_steps],
+                )
             ),
         )
 
@@ -513,10 +501,9 @@ class AgentRuntime:
             yield RuntimeStreamItem(
                 kind="info",
                 message=self._encode_agent_info(
-                    phase="resume_started",
-                    payload={
-                        "resume_step_index": resume_step_index,
-                    },
+                    self._agent_event_factory.resume_started(
+                        resume_step_index=resume_step_index,
+                    )
                 ),
             )
 
@@ -530,11 +517,10 @@ class AgentRuntime:
             yield RuntimeStreamItem(
                 kind="info",
                 message=self._encode_agent_info(
-                    phase="act",
-                    payload={
-                        "step_index": step.index,
-                        "objective": step.objective,
-                    },
+                    self._agent_event_factory.step_started(
+                        step_index=step.index,
+                        objective=step.objective,
+                    )
                 ),
             )
 
@@ -574,8 +560,9 @@ class AgentRuntime:
             yield RuntimeStreamItem(
                 kind="info",
                 message=self._encode_agent_info(
-                    phase="observe",
-                    payload=self._observer_payload(decision, outcome),
+                    self._agent_event_factory.observation(
+                        self._observer_payload(decision, outcome),
+                    )
                 ),
             )
 
@@ -584,11 +571,10 @@ class AgentRuntime:
             yield RuntimeStreamItem(
                 kind="info",
                 message=self._encode_agent_info(
-                    phase="reflect",
-                    payload={
-                        "step_index": step.index,
-                        "reflection": reflection,
-                    },
+                    self._agent_event_factory.reflection(
+                        step_index=step.index,
+                        reflection=reflection,
+                    )
                 ),
             )
 
@@ -610,15 +596,13 @@ class AgentRuntime:
             yield RuntimeStreamItem(
                 kind="info",
                 message=self._encode_agent_info(
-                    phase="replan",
-                    payload={
-                        "step_index": step.index,
-                        "reason": replan.reason,
-                        "from_tool": decision.tool_name,
-                        "to_tool": replan.decision.tool_name,
-                        "to_tool_input": replan.decision.tool_input,
-                    },
-                    display_message=f"Replanned step {step.index}: {replan.reason}",
+                    self._agent_event_factory.replan(
+                        step_index=step.index,
+                        reason=replan.reason,
+                        from_tool=decision.tool_name,
+                        to_tool=replan.decision.tool_name,
+                        to_tool_input=replan.decision.tool_input,
+                    )
                 ),
             )
 
@@ -654,11 +638,12 @@ class AgentRuntime:
             yield RuntimeStreamItem(
                 kind="info",
                 message=self._encode_agent_info(
-                    phase="observe",
-                    payload=self._observer_payload(
-                        replan.decision,
-                        replan_outcome,
-                        replanned=True,
+                    self._agent_event_factory.observation(
+                        self._observer_payload(
+                            replan.decision,
+                            replan_outcome,
+                            replanned=True,
+                        )
                     ),
                 ),
             )
@@ -668,12 +653,11 @@ class AgentRuntime:
             yield RuntimeStreamItem(
                 kind="info",
                 message=self._encode_agent_info(
-                    phase="reflect",
-                    payload={
-                        "step_index": step.index,
-                        "reflection": reflection,
-                        "replanned": True,
-                    },
+                    self._agent_event_factory.reflection(
+                        step_index=step.index,
+                        reflection=reflection,
+                        replanned=True,
+                    )
                 ),
             )
 
@@ -726,10 +710,7 @@ class AgentRuntime:
             yield RuntimeStreamItem(
                 kind="info",
                 message=self._encode_agent_info(
-                    phase="synthesis_mode",
-                    payload={
-                        "mode": generation_mode,
-                    },
+                    self._agent_event_factory.synthesis_mode(mode=generation_mode)
                 ),
             )
 
@@ -755,10 +736,7 @@ class AgentRuntime:
             yield RuntimeStreamItem(
                 kind="info",
                 message=self._encode_agent_info(
-                    phase="synthesis_failed",
-                    payload={
-                        "error": synthesis_error[:220],
-                    },
+                    self._agent_event_factory.synthesis_failed(error=synthesis_error)
                 ),
             )
 
@@ -820,17 +798,15 @@ class AgentRuntime:
                 yield RuntimeStreamItem(
                     kind="info",
                     message=self._encode_agent_info(
-                        phase="memory_write",
-                        payload={
-                            "memory_id": written_memory.memory_id,
-                            "user_id": written_memory.user_id,
-                            "summary": written_memory.summary[:240],
-                            "content_preview": written_memory.content[:240],
-                            "source_task_id": written_memory.source_task_id,
-                            "importance": written_memory.importance,
-                            "created_at": written_memory.created_at,
-                        },
-                        display_message="Memory written",
+                        self._agent_event_factory.memory_write(
+                            memory_id=written_memory.memory_id,
+                            user_id=written_memory.user_id,
+                            summary=written_memory.summary,
+                            content=written_memory.content,
+                            source_task_id=written_memory.source_task_id,
+                            importance=written_memory.importance,
+                            created_at=written_memory.created_at,
+                        )
                     ),
                 )
 
@@ -838,14 +814,13 @@ class AgentRuntime:
         yield RuntimeStreamItem(
             kind="info",
             message=self._encode_agent_info(
-                phase="evaluate",
-                payload={
-                    "estimated_success": evaluation.estimated_success,
-                    "objective_completion": evaluation.objective_completion,
-                    "tool_success_rate": evaluation.tool_success_rate,
-                    "blocked_actions": evaluation.blocked_actions,
-                    "duration_ms": elapsed_ms,
-                },
+                self._agent_event_factory.evaluation(
+                    estimated_success=evaluation.estimated_success,
+                    objective_completion=evaluation.objective_completion,
+                    tool_success_rate=evaluation.tool_success_rate,
+                    blocked_actions=evaluation.blocked_actions,
+                    duration_ms=elapsed_ms,
+                )
             ),
         )
 
@@ -968,20 +943,21 @@ class AgentRuntime:
 
     def _encode_agent_info(
         self,
-        phase: str,
-        payload: dict[str, Any],
+        phase: str | AgentInfoEvent,
+        payload: dict[str, Any] | None = None,
         display_message: str = "",
     ) -> str:
-        # 保留旧版顶层 agent_event/payload 字段，同时增加 schema 标记和
-        # 可选展示文案，供理解标准化工具事件的客户端使用。
-        message = {
-            "schema": AGENT_INFO_SCHEMA,
-            "agent_event": phase,
-            "payload": payload,
-        }
-        if display_message.strip():
-            message["display_message"] = display_message.strip()
-        return json.dumps(message, ensure_ascii=True, separators=(",", ":"))
+        # Deprecated compatibility shim. New runtime call sites should build
+        # AgentInfoEvent values through AgentEventFactory.
+        if isinstance(phase, AgentInfoEvent):
+            return serialize_legacy_info_event(phase)
+        return serialize_legacy_info_event(
+            self._agent_event_factory.info(
+                phase,
+                payload or {},
+                display_message,
+            )
+        )
 
     def _build_tool_event_payload(
         self,
@@ -1112,31 +1088,30 @@ class AgentRuntime:
             RuntimeStreamItem(
                 kind="info",
                 message=self._encode_agent_info(
-                    phase="tool_selected",
-                    payload=self._build_tool_event_payload(
-                        step_index=decision.step_index,
-                        objective=decision.objective,
-                        tool_name=decision.tool_name,
-                        tool_input=decision.tool_input,
-                        extra={
-                            "planner": decision.planner,
-                            "planner_reason": decision.reason,
-                        },
-                    ),
-                    display_message=f"Tool selected: {decision.tool_name}",
+                    self._agent_event_factory.tool_selected(
+                        self._build_tool_event_payload(
+                            step_index=decision.step_index,
+                            objective=decision.objective,
+                            tool_name=decision.tool_name,
+                            tool_input=decision.tool_input,
+                            extra={
+                                "planner": decision.planner,
+                                "planner_reason": decision.reason,
+                            },
+                        )
+                    )
                 ),
             ),
             RuntimeStreamItem(
                 kind="info",
                 message=self._encode_agent_info(
-                    phase="decide",
-                    payload={
-                        "step_index": decision.step_index,
-                        "tool": decision.tool_name,
-                        "tool_input": decision.tool_input,
-                        "planner": decision.planner,
-                        "reason": decision.reason,
-                    },
+                    self._agent_event_factory.decide(
+                        step_index=decision.step_index,
+                        tool=decision.tool_name,
+                        tool_input=decision.tool_input,
+                        planner=decision.planner,
+                        reason=decision.reason,
+                    )
                 ),
             ),
         )
@@ -1168,15 +1143,16 @@ class AgentRuntime:
             yield RuntimeStreamItem(
                 kind="info",
                 message=self._encode_agent_info(
-                    phase="tool_skipped",
-                    payload=self._build_tool_event_payload(
-                        step_index=decision.step_index,
-                        objective=decision.objective,
-                        tool_name=decision.tool_name,
-                        tool_input=decision.tool_input,
-                        reason=outcome.reason,
-                    ),
-                    display_message="Tool skipped: no external tool required",
+                    self._agent_event_factory.tool_skipped(
+                        self._build_tool_event_payload(
+                            step_index=decision.step_index,
+                            objective=decision.objective,
+                            tool_name=decision.tool_name,
+                            tool_input=decision.tool_input,
+                            reason=outcome.reason,
+                        ),
+                        display_message="Tool skipped: no external tool required",
+                    )
                 ),
             )
             return
@@ -1209,28 +1185,28 @@ class AgentRuntime:
             yield RuntimeStreamItem(
                 kind="info",
                 message=self._encode_agent_info(
-                    phase="policy_blocked",
-                    payload={
-                        "step_index": decision.step_index,
-                        "tool": decision.tool_name,
-                        "role": user_role,
-                    },
+                    self._agent_event_factory.policy_blocked(
+                        step_index=decision.step_index,
+                        tool=decision.tool_name,
+                        role=user_role,
+                    )
                 ),
             )
             yield RuntimeStreamItem(
                 kind="info",
                 message=self._encode_agent_info(
-                    phase="tool_skipped",
-                    payload=self._build_tool_event_payload(
-                        step_index=decision.step_index,
-                        objective=decision.objective,
-                        tool_name=decision.tool_name,
-                        tool_input=decision.tool_input,
-                        tool_call_id=tool_call_id,
-                        reason=outcome.reason,
-                        extra={"role": user_role},
-                    ),
-                    display_message=f"Tool skipped: {decision.tool_name} blocked for role {user_role}",
+                    self._agent_event_factory.tool_skipped(
+                        self._build_tool_event_payload(
+                            step_index=decision.step_index,
+                            objective=decision.objective,
+                            tool_name=decision.tool_name,
+                            tool_input=decision.tool_input,
+                            tool_call_id=tool_call_id,
+                            reason=outcome.reason,
+                            extra={"role": user_role},
+                        ),
+                        display_message=f"Tool skipped: {decision.tool_name} blocked for role {user_role}",
+                    )
                 ),
             )
             return
@@ -1272,45 +1248,41 @@ class AgentRuntime:
                 should_pause=True,
             )
             outcome_box["outcome"] = outcome
-            pause_payload = {
-                "step_index": decision.step_index,
-                "tool": decision.tool_name,
-                "tool_name": decision.tool_name,
-                "tool_input": decision.tool_input,
-                "risk_level": tool_risk_level,
-                "resume_step_index": decision.step_index,
-                "reason": outcome.reason,
-                "approval_reason": f"{tool_risk_level} risk tool call requires approval",
-                "approved_tool_call": self._build_approval_record(decision, tool_risk_level),
-                "hint": "call task approve endpoint to resume execution",
-            }
-            pause_payload.update(
-                self._build_tool_event_payload(
-                    step_index=decision.step_index,
-                    objective=decision.objective,
-                    tool_name=decision.tool_name,
-                    tool_input=decision.tool_input,
-                    tool_call_id=tool_call_id,
-                    reason=outcome.reason,
-                )
-            )
             yield RuntimeStreamItem(
                 kind="info",
                 message=self._encode_agent_info(
-                    phase="approval_required",
-                    payload=pause_payload,
-                    display_message=f"Approval required for tool: {decision.tool_name}",
+                    self._agent_event_factory.approval_required(
+                        self._build_tool_event_payload(
+                            step_index=decision.step_index,
+                            objective=decision.objective,
+                            tool_name=decision.tool_name,
+                            tool_input=decision.tool_input,
+                            tool_call_id=tool_call_id,
+                            reason=outcome.reason,
+                        ),
+                        step_index=decision.step_index,
+                        tool=decision.tool_name,
+                        tool_input=decision.tool_input,
+                        risk_level=tool_risk_level,
+                        reason=outcome.reason,
+                        approval_reason=f"{tool_risk_level} risk tool call requires approval",
+                        resume_step_index=decision.step_index,
+                        approved_tool_call=self._build_approval_record(
+                            decision,
+                            tool_risk_level,
+                        ),
+                        display_message=f"Approval required for tool: {decision.tool_name}",
+                    )
                 ),
             )
             yield RuntimeStreamItem(
                 kind="pause",
                 message=self._encode_agent_info(
-                    phase="paused",
-                    payload={
-                        "reason": observation,
-                        "tool": decision.tool_name,
-                        "resume_step_index": decision.step_index,
-                    },
+                    self._agent_event_factory.paused(
+                        reason=observation,
+                        tool=decision.tool_name,
+                        resume_step_index=decision.step_index,
+                    )
                 ),
             )
             return
@@ -1337,15 +1309,15 @@ class AgentRuntime:
         yield RuntimeStreamItem(
             kind="info",
             message=self._encode_agent_info(
-                phase="tool_started",
-                payload=self._build_tool_event_payload(
-                    step_index=decision.step_index,
-                    objective=decision.objective,
-                    tool_name=decision.tool_name,
-                    tool_input=decision.tool_input,
-                    tool_call_id=tool_call_id,
-                ),
-                display_message=f"Tool started: {decision.tool_name}",
+                self._agent_event_factory.tool_started(
+                    self._build_tool_event_payload(
+                        step_index=decision.step_index,
+                        objective=decision.objective,
+                        tool_name=decision.tool_name,
+                        tool_input=decision.tool_input,
+                        tool_call_id=tool_call_id,
+                    )
+                )
             ),
         )
 
@@ -1383,22 +1355,25 @@ class AgentRuntime:
         )
         outcome_box["outcome"] = outcome
 
-        phase = "tool_finished" if result.ok else "tool_failed"
-        display = "Tool finished" if result.ok else "Tool failed"
+        event_builder = (
+            self._agent_event_factory.tool_finished
+            if result.ok
+            else self._agent_event_factory.tool_failed
+        )
         yield RuntimeStreamItem(
             kind="info",
             message=self._encode_agent_info(
-                phase=phase,
-                payload=self._build_tool_event_payload(
-                    step_index=decision.step_index,
-                    objective=decision.objective,
-                    tool_name=decision.tool_name,
-                    tool_input=decision.tool_input,
-                    tool_call_id=tool_call_id,
-                    result=result,
-                    duration_ms=tool_duration_ms,
-                ),
-                display_message=f"{display}: {decision.tool_name}",
+                event_builder(
+                    self._build_tool_event_payload(
+                        step_index=decision.step_index,
+                        objective=decision.objective,
+                        tool_name=decision.tool_name,
+                        tool_input=decision.tool_input,
+                        tool_call_id=tool_call_id,
+                        result=result,
+                        duration_ms=tool_duration_ms,
+                    )
+                )
             ),
         )
 

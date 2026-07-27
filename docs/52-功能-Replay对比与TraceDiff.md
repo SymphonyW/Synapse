@@ -50,11 +50,11 @@
 3. `ReplayDiffPanel.tsx` 负责 replay 列表、左右并排摘要、可折叠阶段、工具序列和文本 diff；
 4. 当 trace 缺失阶段或事件被截断时，面板仍展示已知内容并提示不完整。
 
-## 6. 存储与迁移限制
+## 6. 存储与迁移
 
-当前仓库仍采用应用启动时建表的方式，没有独立 migration 目录。`PostgresStore.ensureSchema` 会执行：
+Replay 相关 schema 已纳入 Gateway migration：
 
-1. `ALTER TABLE tasks ADD COLUMN IF NOT EXISTS replay_of_task_id ...`
-2. 创建 `(replay_of_task_id, created_at DESC)` 索引。
+1. `000001_initial_schema.up.sql` 创建 `tasks.replay_of_task_id`。
+2. `000002_task_replay_indexes.up.sql` 创建 `(replay_of_task_id, created_at DESC)` 索引。
 
-这能兼容老数据读取，但若后续进入多人协作或多环境部署阶段，建议补正式 migration 体系。
+旧 `ensureSchema` 数据库若结构已经匹配当前版本，可用 `migrate-baseline -Version 4` 记录版本。

@@ -1,0 +1,7 @@
+BEGIN;
+
+ALTER TABLE task_events ADD COLUMN schema_version TEXT NOT NULL DEFAULT '';
+ALTER TABLE task_events ADD COLUMN event_name TEXT NOT NULL DEFAULT '';
+ALTER TABLE task_events ADD COLUMN payload JSONB NOT NULL DEFAULT '{}'::jsonb;
+
+COMMIT;

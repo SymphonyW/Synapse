@@ -46,13 +46,14 @@ func main() {
 		postgresStore, err := store.NewPostgres(dbCtx, cfg.DatabaseURL)
 		cancel()
 		if err != nil {
-			// 软降级到内存存储，保证本地/开发环境仍可运行。
-			log.Printf("failed to initialize postgres store, fallback to in-memory: %v", err)
+			log.Fatalf("failed to initialize postgres store: %v", err)
 		} else {
 			defer postgresStore.Close()
 			taskStore = postgresStore
 			log.Printf("task store backend=postgres")
 		}
+	} else {
+		log.Printf("task store backend=in-memory (SYNAPSE_DATABASE_URL is empty)")
 	}
 
 	adminUsername := strings.ToLower(strings.TrimSpace(cfg.AuthAdminUsername))

@@ -1,4 +1,22 @@
 services:
+  migrate:
+    build:
+      context: .
+      dockerfile: services/gateway-go/Dockerfile
+      args:
+        GOLANG_BASE: ${GOLANG_BASE:-docker.io/library/golang:1.25}
+        RUNTIME_BASE: ${RUNTIME_BASE:-gcr.io/distroless/static-debian12:latest}
+        GOPROXY: ${GOPROXY:-https://goproxy.cn,direct}
+        GOSUMDB: ${GOSUMDB:-sum.golang.google.cn}
+    environment:
+      SYNAPSE_DATABASE_URL: "postgres://synapse:synapse@postgres:5432/synapse?sslmode=disable"
+    entrypoint: ["/migrate"]
+    command: ["up", "-path", "/migrations"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: "no"
+
   gateway:
     build:
       context: .
@@ -25,9 +43,14 @@ services:
     ports:
       - "8080:8080"
     depends_on:
-      - ai-engine
-      - postgres
-      - redis
+      ai-engine:
+        condition: service_started
+      migrate:
+        condition: service_completed_successfully
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_started
 
   web:
     build:
@@ -118,6 +141,12 @@ services:
       - "15432:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U synapse -d synapse"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+      start_period: 5s
 
   redis:
     image: ${REDIS_IMAGE:-docker.io/library/redis:7-alpine}

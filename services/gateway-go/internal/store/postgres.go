@@ -10,6 +10,7 @@ import (
 
 	"github.com/lib/pq"
 	"github.com/synapse/synapse/services/gateway-go/internal/domain"
+	dbmigration "github.com/synapse/synapse/services/gateway-go/internal/migration"
 )
 
 // dbOperationTimeout 为单次数据库操作设置上限，避免在数据库压力下无限阻塞。
@@ -20,7 +21,7 @@ type PostgresStore struct {
 	db *sql.DB
 }
 
-// NewPostgres 建立连接、校验可达性并确保所需表结构存在。
+// NewPostgres 建立连接、校验可达性并确认数据库已完成版本化迁移。
 func NewPostgres(ctx context.Context, databaseURL string) (*PostgresStore, error) {
 	db, err := sql.Open("postgres", databaseURL)
 	if err != nil {
@@ -33,7 +34,7 @@ func NewPostgres(ctx context.Context, databaseURL string) (*PostgresStore, error
 		return nil, err
 	}
 
-	if err := store.ensureSchema(ctx); err != nil {
+	if err := dbmigration.CheckRequiredVersion(ctx, db); err != nil {
 		_ = db.Close()
 		return nil, err
 	}
@@ -885,88 +886,6 @@ func (s *PostgresStore) taskExists(ctx context.Context, taskID string) (bool, er
 	}
 
 	return true, nil
-}
-
-// ensureSchema 在启动时创建必要表与索引，降低当前阶段的迁移依赖。
-func (s *PostgresStore) ensureSchema(ctx context.Context) error {
-	_, err := s.db.ExecContext(
-		ctx,
-		`CREATE TABLE IF NOT EXISTS tasks (
-		 id TEXT PRIMARY KEY,
-		 user_id TEXT NOT NULL,
-		 prompt TEXT NOT NULL,
-		 status TEXT NOT NULL,
-		 error TEXT NOT NULL DEFAULT '',
-		 replay_of_task_id TEXT NULL REFERENCES tasks(id) ON DELETE SET NULL,
-		 metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
-		 created_at TIMESTAMPTZ NOT NULL,
-		 updated_at TIMESTAMPTZ NOT NULL
-		);
-
-		ALTER TABLE tasks ADD COLUMN IF NOT EXISTS replay_of_task_id TEXT NULL REFERENCES tasks(id) ON DELETE SET NULL;
-
-		CREATE TABLE IF NOT EXISTS task_events (
-		 id BIGSERIAL PRIMARY KEY,
-		 task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
-		 event_type TEXT NOT NULL,
-		 message TEXT NOT NULL DEFAULT '',
-		 token TEXT NOT NULL DEFAULT '',
-		 trace_id TEXT NOT NULL DEFAULT '',
-		 schema_version TEXT NOT NULL DEFAULT '',
-		 event_name TEXT NOT NULL DEFAULT '',
-		 payload JSONB NOT NULL DEFAULT '{}'::jsonb,
-		 emitted_at_unix_ms BIGINT NOT NULL,
-		 created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-		);
-
-		ALTER TABLE task_events ADD COLUMN IF NOT EXISTS schema_version TEXT NOT NULL DEFAULT '';
-		ALTER TABLE task_events ADD COLUMN IF NOT EXISTS event_name TEXT NOT NULL DEFAULT '';
-		ALTER TABLE task_events ADD COLUMN IF NOT EXISTS payload JSONB NOT NULL DEFAULT '{}'::jsonb;
-
-		CREATE TABLE IF NOT EXISTS dead_letter_tasks (
-		 task_id TEXT PRIMARY KEY REFERENCES tasks(id) ON DELETE CASCADE,
-		 reason TEXT NOT NULL,
-		 attempts INTEGER NOT NULL,
-		 created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-		 updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-		);
-
-		CREATE TABLE IF NOT EXISTS auth_users (
-		 username TEXT PRIMARY KEY,
-		 password_hash TEXT NOT NULL,
-		 role TEXT NOT NULL,
-		 created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-		 updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-		);
-
-		CREATE TABLE IF NOT EXISTS auth_sessions (
-		 token TEXT PRIMARY KEY,
-		 username TEXT NOT NULL REFERENCES auth_users(username) ON DELETE CASCADE,
-		 role TEXT NOT NULL,
-		 expires_at TIMESTAMPTZ NOT NULL,
-		 created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-		);
-
-		CREATE TABLE IF NOT EXISTS tool_policies (
-		 id TEXT PRIMARY KEY,
-		 role_allow JSONB NOT NULL DEFAULT '{}'::jsonb,
-		 approval_required JSONB NOT NULL DEFAULT '[]'::jsonb,
-		 disabled_tools JSONB NOT NULL DEFAULT '[]'::jsonb,
-		 version BIGINT NOT NULL DEFAULT 0,
-		 updated_at TIMESTAMPTZ NOT NULL,
-		 updated_by TEXT NOT NULL DEFAULT '',
-		 description TEXT NOT NULL DEFAULT ''
-		);
-
-		CREATE INDEX IF NOT EXISTS idx_task_events_task_id_id ON task_events (task_id, id);
-		CREATE INDEX IF NOT EXISTS idx_tasks_user_conversation_created
-		 ON tasks (user_id, (metadata->>'conversation_id'), created_at DESC);
-		CREATE INDEX IF NOT EXISTS idx_tasks_replay_of_created
-		 ON tasks (replay_of_task_id, created_at DESC);
-		CREATE INDEX IF NOT EXISTS idx_auth_sessions_username ON auth_sessions (username);
-		CREATE INDEX IF NOT EXISTS idx_auth_sessions_expires_at ON auth_sessions (expires_at);`,
-	)
-	return err
 }
 
 // rowScanner 抽象 sql.Row 与 sql.Rows，使 scanTask 可复用。

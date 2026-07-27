@@ -48,7 +48,7 @@ Gateway 是系统控制平面核心，负责：
 
 ## 6. 关键工程特性
 
-1. 软降级：依赖不可用时回退内存实现。
+1. 明确存储模式：未配置 Postgres 时使用内存 TaskStore；配置 Postgres 后必须完成 migration。
 2. 幂等取消：已取消任务再次取消返回 200。
 3. 审批恢复：paused 任务可通过 approve 接口恢复到 queued。
 4. 权限边界：普通用户仅可访问自己的任务，CreateTask 的 user_id 固定取会话用户。

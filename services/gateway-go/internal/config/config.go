@@ -18,6 +18,13 @@ type Config struct {
 	RedisPassword          string
 	RedisDB                int
 	TaskQueueName          string
+	TaskStream             string
+	TaskConsumerGroup      string
+	TaskConsumerName       string
+	TaskVisibilityTimeout  time.Duration
+	TaskReclaimInterval    time.Duration
+	TaskReclaimBatchSize   int
+	TaskStreamMaxLen       int64
 	TaskMaxAttempts        int
 	TaskRetryBackoff       time.Duration
 	TaskExecutionTimeout   time.Duration
@@ -38,6 +45,13 @@ func Load() Config {
 		RedisPassword:          os.Getenv("SYNAPSE_REDIS_PASSWORD"),
 		RedisDB:                getIntEnv("SYNAPSE_REDIS_DB", 0),
 		TaskQueueName:          getenv("SYNAPSE_TASK_QUEUE", "synapse:tasks"),
+		TaskStream:             getenv("SYNAPSE_TASK_STREAM", getenv("SYNAPSE_TASK_QUEUE", "synapse:tasks")),
+		TaskConsumerGroup:      getenv("SYNAPSE_TASK_CONSUMER_GROUP", "synapse-gateway"),
+		TaskConsumerName:       os.Getenv("SYNAPSE_TASK_CONSUMER_NAME"),
+		TaskVisibilityTimeout:  getDurationEnv("SYNAPSE_TASK_VISIBILITY_TIMEOUT", 150*time.Second),
+		TaskReclaimInterval:    getDurationEnv("SYNAPSE_TASK_RECLAIM_INTERVAL", 10*time.Second),
+		TaskReclaimBatchSize:   getIntEnv("SYNAPSE_TASK_RECLAIM_BATCH_SIZE", 10),
+		TaskStreamMaxLen:       getInt64Env("SYNAPSE_TASK_STREAM_MAXLEN", 10000),
 		TaskMaxAttempts:        getIntEnv("SYNAPSE_TASK_MAX_ATTEMPTS", 3),
 		TaskRetryBackoff:       getDurationEnv("SYNAPSE_TASK_RETRY_BACKOFF", 2*time.Second),
 		TaskExecutionTimeout:   getDurationEnv("SYNAPSE_TASK_EXEC_TIMEOUT", 120*time.Second),
@@ -78,6 +92,21 @@ func getIntEnv(key string, fallback int) int {
 	}
 
 	parsed, err := strconv.Atoi(value)
+	if err != nil {
+		return fallback
+	}
+
+	return parsed
+}
+
+// getInt64Env 解析 64 位整数环境变量，解析失败时使用默认值。
+func getInt64Env(key string, fallback int64) int64 {
+	value := os.Getenv(key)
+	if value == "" {
+		return fallback
+	}
+
+	parsed, err := strconv.ParseInt(value, 10, 64)
 	if err != nil {
 		return fallback
 	}

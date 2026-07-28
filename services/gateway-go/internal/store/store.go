@@ -28,6 +28,8 @@ type TaskStore interface {
 	DeleteTasksByConversation(userID string, conversationID string) ([]string, error)
 	// UpdateStatus 更新任务状态与错误信息。
 	UpdateStatus(taskID string, status domain.TaskStatus, errorMessage string) (domain.Task, bool)
+	// AcquireExecutionLease 原子获取任务执行权，避免至少一次投递导致多实例重复执行。
+	AcquireExecutionLease(taskID string, owner string, leaseUntil time.Time) (domain.Task, bool, error)
 	// UpdateMetadata 合并更新任务元数据，空值会删除对应 key。
 	UpdateMetadata(taskID string, metadataUpdates map[string]string) (domain.Task, bool, error)
 	// AppendEvent 追加任务事件。

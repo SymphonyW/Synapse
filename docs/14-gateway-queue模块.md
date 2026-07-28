@@ -2,7 +2,7 @@
 
 ## 1. 模块定位
 
-Queue 模块负责任务 ID 的投递与消费抽象，屏蔽队列后端差异。
+Queue 模块负责任务 ID 的可靠投递与消费抽象，屏蔽内存队列和 Redis Streams 后端差异。
 
 文件：
 
@@ -12,43 +12,47 @@ Queue 模块负责任务 ID 的投递与消费抽象，屏蔽队列后端差异�
 
 ## 2. 抽象接口
 
-TaskQueue 提供三个能力：
+TaskQueue 提供：
 
-1. Enqueue(ctx, taskID)
-2. Dequeue(ctx)
-3. Close()
+1. `Enqueue(ctx, taskID)`
+2. `Claim(ctx, consumer) -> Delivery`
+3. `Ack(ctx, delivery)`
+4. `Reclaim(ctx, consumer, minIdle, limit)`
+5. `Stats(ctx)`
+6. `Close()`
 
-上层（API/Worker）不依赖具体实现。
+`Delivery` 包含 `message_id`、`task_id`、`consumer` 和 `delivery_count`。Worker 必须在终态、暂停或死信后 Ack。
 
-## 3. InMemoryQueue 实现
+## 3. InMemoryQueue
 
-1. 基于带缓冲 channel。
-2. 适合本地开发、单进程测试。
-3. 支持关闭信号与上下文取消。
-4. 不支持跨进程共享与持久化。
+1. 基于 channel + pending map。
+2. Claim 后进入 pending，Ack 后删除。
+3. Reclaim 可转移 idle pending delivery，但不提供跨进程持久化。
 
-## 4. RedisQueue 实现
+## 4. RedisQueue
 
-1. 入队：LPush。
-2. 出队：BRPop（短超时轮询）。
-3. 适合容器化多实例场景。
-4. 依赖 Redis 可用性与网络稳定性。
+1. 入队：`XADD`。
+2. 领取：`XREADGROUP`。
+3. 确认：`XACK`。
+4. 恢复：`XAUTOCLAIM`。
+5. 启动时创建 consumer group，`BUSYGROUP` 视为正常。
 
-## 5. 运行时选择策略
+## 5. 运行时选择
 
 Gateway 启动时：
 
-1. 如果 SYNAPSE_REDIS_ADDR 可用且连接成功，使用 RedisQueue。
+1. 如果 `SYNAPSE_REDIS_ADDR` 可用且连接成功，使用 Redis Streams。
 2. 否则回退 InMemoryQueue。
 
-## 6. 语义与限制
+## 6. 语义
 
-1. 当前实现是“至少尝试执行”语义，没有显式 ack/reclaim。
-2. 若 Worker 在执行中崩溃，任务可能需要依赖上层状态修复。
-3. 对高可靠场景建议升级到支持消费确认的消息系统。
+1. Redis Streams 是至少一次投递。
+2. Worker 崩溃后，未 Ack 的 pending message 由其他 consumer reclaim。
+3. 数据库 execution lease 保证同一任务不会被多个实例同时执行。
+4. `paused/completed/failed/canceled` 的重复投递会被 Ack 且不重新执行。
 
-## 7. 优化方向
+## 7. 运维关注
 
-1. 引入可观测指标：队列长度、出队延迟。
-2. 增加幂等键策略，避免重复入队异常放大。
-3. 若要更强语义，可迁移到 Redis Stream、NATS JetStream 或 Kafka。
+1. `/healthz` 输出 `task_queue.pending_count`、`consumer_group`、`consumer_name`。
+2. `SYNAPSE_TASK_VISIBILITY_TIMEOUT` 应大于正常任务执行时间。
+3. 从旧 List 升级时，停止旧 Worker 并人工处理旧 List 中的遗留任务。

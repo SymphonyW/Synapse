@@ -86,26 +86,42 @@ func main() {
 
 	// 队列同样采用“内存默认、Redis 优先”的可用性策略。
 	taskQueue := queue.TaskQueue(queue.NewInMemoryQueue(1024))
+	consumerName := strings.TrimSpace(cfg.TaskConsumerName)
+	if consumerName == "" {
+		consumerName = queue.NewConsumerName("gateway")
+	}
 	if cfg.RedisAddr != "" {
 		// Redis 初始化超时设置较短，优先保障启动响应速度。
 		redisCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		redisQueue, err := queue.NewRedisQueue(redisCtx, cfg.RedisAddr, cfg.RedisPassword, cfg.RedisDB, cfg.TaskQueueName)
+		redisQueue, err := queue.NewRedisQueue(redisCtx, queue.RedisOptions{
+			Addr:          cfg.RedisAddr,
+			Password:      cfg.RedisPassword,
+			DB:            cfg.RedisDB,
+			Stream:        cfg.TaskStream,
+			ConsumerGroup: cfg.TaskConsumerGroup,
+			ConsumerName:  consumerName,
+			StreamMaxLen:  cfg.TaskStreamMaxLen,
+		})
 		cancel()
 		if err != nil {
 			// 回退到内存队列，保证开发场景下功能可用。
 			log.Printf("failed to initialize redis queue, fallback to in-memory: %v", err)
 		} else {
 			taskQueue = redisQueue
-			log.Printf("task queue backend=redis")
+			log.Printf("task queue backend=redis-stream stream=%s group=%s consumer=%s", cfg.TaskStream, cfg.TaskConsumerGroup, consumerName)
 		}
 	}
 	defer taskQueue.Close()
 
 	// 处理器负责“出队 -> 执行 -> 重试/死信”完整流程。
 	processor := worker.NewTaskProcessor(taskStore, taskQueue, agentClient, worker.ProcessorOptions{
-		ExecutionTimeout: cfg.TaskExecutionTimeout,
-		MaxAttempts:      cfg.TaskMaxAttempts,
-		RetryBackoff:     cfg.TaskRetryBackoff,
+		ExecutionTimeout:  cfg.TaskExecutionTimeout,
+		MaxAttempts:       cfg.TaskMaxAttempts,
+		RetryBackoff:      cfg.TaskRetryBackoff,
+		ConsumerName:      consumerName,
+		VisibilityTimeout: cfg.TaskVisibilityTimeout,
+		ReclaimInterval:   cfg.TaskReclaimInterval,
+		ReclaimBatchSize:  cfg.TaskReclaimBatchSize,
 	})
 	go processor.Run(appCtx)
 

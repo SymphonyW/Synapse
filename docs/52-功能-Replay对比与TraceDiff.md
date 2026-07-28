@@ -57,4 +57,4 @@ Replay 相关 schema 已纳入 Gateway migration：
 1. `000001_initial_schema.up.sql` 创建 `tasks.replay_of_task_id`。
 2. `000002_task_replay_indexes.up.sql` 创建 `(replay_of_task_id, created_at DESC)` 索引。
 
-旧 `ensureSchema` 数据库若结构已经匹配当前版本，可用 `migrate-baseline -Version 4` 记录版本。
+旧 `ensureSchema` 数据库若结构已经匹配 v4，可用 `migrate-baseline -Version 4` 记录版本，再执行 `migrate-up` 升级到当前 schema。

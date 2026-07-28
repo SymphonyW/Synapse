@@ -152,11 +152,21 @@ func (h *Handler) Healthz(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	writeJSON(w, http.StatusOK, map[string]any{
+	payload := map[string]any{
 		"status":         "ok",
 		"ai_engine":      health.Status,
 		"model_provider": health.ModelProvider,
-	})
+	}
+	if h.taskQueue != nil {
+		stats, statsErr := h.taskQueue.Stats(ctx)
+		if statsErr != nil {
+			payload["task_queue_error"] = statsErr.Error()
+		} else {
+			payload["task_queue"] = stats
+		}
+	}
+
+	writeJSON(w, http.StatusOK, payload)
 }
 
 // CreateTask 校验请求并落库为 queued，再把任务 ID 入队等待异步执行。

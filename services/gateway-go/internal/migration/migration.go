@@ -21,7 +21,7 @@ import (
 )
 
 const (
-	RequiredVersion = 4
+	RequiredVersion = 5
 	VersionTable    = "schema_migrations"
 )
 
@@ -108,7 +108,7 @@ func Baseline(ctx context.Context, opts Options, version uint) error {
 	if err := db.PingContext(ctx); err != nil {
 		return err
 	}
-	if err := ValidateBaselineSchema(ctx, db); err != nil {
+	if err := ValidateBaselineSchema(ctx, db, version); err != nil {
 		return err
 	}
 
@@ -156,7 +156,7 @@ func CurrentVersion(ctx context.Context, db *sql.DB) (VersionState, error) {
 	return state, nil
 }
 
-func ValidateBaselineSchema(ctx context.Context, db *sql.DB) error {
+func ValidateBaselineSchema(ctx context.Context, db *sql.DB, version uint) error {
 	requiredColumns := map[string][]string{
 		"tasks": {
 			"id", "user_id", "prompt", "status", "error", "replay_of_task_id", "metadata", "created_at", "updated_at",
@@ -177,6 +177,9 @@ func ValidateBaselineSchema(ctx context.Context, db *sql.DB) error {
 			"id", "role_allow", "approval_required", "disabled_tools", "version", "updated_at", "updated_by", "description",
 		},
 	}
+	if version >= 5 {
+		requiredColumns["tasks"] = append(requiredColumns["tasks"], "execution_owner", "execution_lease_until", "execution_attempt")
+	}
 
 	var missing []string
 	for table, columns := range requiredColumns {
@@ -191,13 +194,17 @@ func ValidateBaselineSchema(ctx context.Context, db *sql.DB) error {
 		}
 	}
 
-	for _, index := range []string{
+	requiredIndexes := []string{
 		"idx_task_events_task_id_id",
 		"idx_tasks_user_conversation_created",
 		"idx_tasks_replay_of_created",
 		"idx_auth_sessions_username",
 		"idx_auth_sessions_expires_at",
-	} {
+	}
+	if version >= 5 {
+		requiredIndexes = append(requiredIndexes, "idx_tasks_execution_lease")
+	}
+	for _, index := range requiredIndexes {
 		ok, err := hasIndex(ctx, db, index)
 		if err != nil {
 			return err
@@ -209,7 +216,7 @@ func ValidateBaselineSchema(ctx context.Context, db *sql.DB) error {
 
 	if len(missing) > 0 {
 		sort.Strings(missing)
-		return fmt.Errorf("baseline refused: existing schema does not match required version %d; missing %s", RequiredVersion, strings.Join(missing, ", "))
+		return fmt.Errorf("baseline refused: existing schema does not match version %d; missing %s", version, strings.Join(missing, ", "))
 	}
 	return nil
 }

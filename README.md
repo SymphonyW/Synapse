@@ -208,7 +208,7 @@ sequenceDiagram
 | AI Engine | Python 3.12、grpcio、OpenAI-compatible `/chat/completions` |
 | Web | React 19、TypeScript、Vite、Vitest、React Testing Library |
 | 协议 | HTTP JSON、SSE、Protocol Buffers、gRPC streaming |
-| 存储/队列 | PostgreSQL / Redis，可回退到内存实现 |
+| 存储/队列 | PostgreSQL / Redis Streams，可回退到内存实现 |
 | 部署 | Dockerfile、Docker Compose、PowerShell dev script |
 
 ## 目录结构
@@ -283,7 +283,8 @@ Synapse 适合本地研究、架构验证、Demo 和二次开发。它已经有�
 |---|---|
 | 任务、事件、审批、记忆、Trace、Replay、Regression 主链路 | 生产级监控、告警和 SLO |
 | Docker Compose 一键启动全栈 | 生产级 HTTPS、Cookie Secure、CSRF、防爆破和 secret 管理 |
-| Gateway 版本化 PostgreSQL migration | Redis 队列 ack/reclaim 语义 |
+| Gateway 版本化 PostgreSQL migration | 生产级 migration 审批与回滚演练 |
+| Redis Streams ack/reclaim 可靠任务投递 | Redis 队列多并发 worker 配置与压测 |
 | OpenAI-compatible provider、OpenAPI 工具、MCP stdio 接入 | 完整 OpenAPI/Swagger 文档 |
 | Web 管理工具策略并热更新到 AI Engine | CI/CD、镜像扫描、发布和回滚流程 |
 

@@ -129,9 +129,11 @@ Gateway PostgreSQL schema is versioned under `services/gateway-go/migrations`. R
 | Show version and dirty state | `.\scripts\dev.ps1 -Task migrate-status` |
 | Create next migration pair | `.\scripts\dev.ps1 -Task migrate-create -Name short_name` |
 | Roll back one step | `.\scripts\dev.ps1 -Task migrate-down -Steps 1` |
-| Baseline old ensureSchema DB | `.\scripts\dev.ps1 -Task migrate-baseline -Version 4` |
+| Baseline old ensureSchema DB | `.\scripts\dev.ps1 -Task migrate-baseline -Version 4` then `.\scripts\dev.ps1 -Task migrate-up` |
 
 Before a PR that changes Gateway storage, auth/session persistence, task events, tool policy, Compose, or migration SQL, run Gateway tests and at least `migrate-up` plus `migrate-status` against a disposable Postgres database. Down migrations can delete data; back up real databases before using them outside disposable environments.
+
+Queue changes should keep the `TaskQueue` Delivery/Ack/Reclaim contract intact. For Redis Streams integration tests, run with `SYNAPSE_TEST_REDIS_ADDR=127.0.0.1:6379`; without that env the tests skip and normal `go test ./...` stays local-only.
 
 ## AgentEvent V2 Migration
 

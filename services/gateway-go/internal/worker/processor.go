@@ -34,9 +34,18 @@ const metadataAgentRequiredReasonKey = "agent_required_reason"
 
 // ProcessorOptions 控制任务执行循环的运行时行为。
 type ProcessorOptions struct {
-	ExecutionTimeout time.Duration
-	MaxAttempts      int
-	RetryBackoff     time.Duration
+	ExecutionTimeout  time.Duration
+	MaxAttempts       int
+	RetryBackoff      time.Duration
+	ConsumerName      string
+	VisibilityTimeout time.Duration
+	ReclaimInterval   time.Duration
+	ReclaimBatchSize  int
+}
+
+type activeExecution struct {
+	cancel    context.CancelFunc
+	messageID string
 }
 
 // TaskProcessor 负责消费队列任务、调用 AI Runtime、持久化事件并执行重试/取消语义。
@@ -46,7 +55,7 @@ type TaskProcessor struct {
 	agent     agent.Client
 	options   ProcessorOptions
 	activeMu  sync.Mutex
-	active    map[string]context.CancelFunc
+	active    map[string]activeExecution
 }
 
 // NewTaskProcessor 填充合理默认值，调用方可按需覆盖。
@@ -60,54 +69,151 @@ func NewTaskProcessor(taskStore store.TaskStore, taskQueue queue.TaskQueue, agen
 	if options.RetryBackoff <= 0 {
 		options.RetryBackoff = 2 * time.Second
 	}
+	if options.ConsumerName == "" {
+		options.ConsumerName = queue.NewConsumerName("worker")
+	}
+	if options.VisibilityTimeout <= 0 {
+		options.VisibilityTimeout = options.ExecutionTimeout + 30*time.Second
+	}
+	if options.ReclaimInterval <= 0 {
+		options.ReclaimInterval = 10 * time.Second
+	}
+	if options.ReclaimBatchSize <= 0 {
+		options.ReclaimBatchSize = 10
+	}
 
 	return &TaskProcessor{
 		taskStore: taskStore,
 		taskQueue: taskQueue,
 		agent:     agentClient,
 		options:   options,
-		active:    map[string]context.CancelFunc{},
+		active:    map[string]activeExecution{},
 	}
 }
 
 // Cancel 通过调用已登记的取消函数，请求终止正在执行的任务。
 func (p *TaskProcessor) Cancel(taskID string) bool {
 	p.activeMu.Lock()
-	cancel, exists := p.active[taskID]
+	active, exists := p.active[taskID]
 	p.activeMu.Unlock()
 	if !exists {
 		return false
 	}
 
-	cancel()
+	active.cancel()
 	return true
 }
 
-// Run 是主消费循环：阻塞出队并在当前 worker 实例中串行处理任务。
+// Run 是主消费循环：Claim delivery，处理完成后显式 Ack，崩溃时由 reclaim 恢复。
 func (p *TaskProcessor) Run(ctx context.Context) {
+	reclaimed := make(chan queue.Delivery, p.options.ReclaimBatchSize)
+	go p.reclaimLoop(ctx, reclaimed)
+
 	for {
-		taskID, err := p.taskQueue.Dequeue(ctx)
+		select {
+		case <-ctx.Done():
+			return
+		case delivery := <-reclaimed:
+			p.handleDelivery(ctx, delivery)
+			continue
+		default:
+		}
+
+		delivery, err := p.taskQueue.Claim(ctx, p.options.ConsumerName)
 		if err != nil {
 			if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 				return
 			}
-			log.Printf("task dequeue error: %v", err)
+			if errors.Is(err, queue.ErrNoDelivery) {
+				continue
+			}
+			log.Printf("task claim error: %v", err)
 			time.Sleep(500 * time.Millisecond)
 			continue
 		}
 
-		// 每个任务拥有独立的重试生命周期。
-		p.processWithRetry(ctx, taskID)
+		p.handleDelivery(ctx, delivery)
+	}
+}
+
+func (p *TaskProcessor) reclaimLoop(ctx context.Context, out chan<- queue.Delivery) {
+	ticker := time.NewTicker(p.options.ReclaimInterval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			deliveries, err := p.taskQueue.Reclaim(ctx, p.options.ConsumerName, p.options.VisibilityTimeout, p.options.ReclaimBatchSize)
+			if err != nil {
+				if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+					return
+				}
+				log.Printf("task reclaim error: %v", err)
+				continue
+			}
+			for _, delivery := range deliveries {
+				select {
+				case <-ctx.Done():
+					return
+				case out <- delivery:
+				default:
+					log.Printf("task reclaim buffer full task_id=%s message_id=%s", delivery.TaskID, delivery.MessageID)
+				}
+			}
+		}
+	}
+}
+
+func (p *TaskProcessor) handleDelivery(ctx context.Context, delivery queue.Delivery) {
+	if strings.TrimSpace(delivery.TaskID) == "" {
+		_ = p.taskQueue.Ack(ctx, delivery)
+		return
+	}
+
+	if active, exists := p.activeDelivery(delivery.TaskID); exists {
+		if active.messageID == delivery.MessageID {
+			return
+		}
+		_ = p.taskQueue.Ack(ctx, delivery)
+		return
+	}
+
+	if shouldDeadLetterPoisonDelivery(delivery, p.options.MaxAttempts) {
+		p.finalizeFailed(delivery.TaskID, fmt.Errorf("task delivery exceeded max attempts"), int(delivery.DeliveryCount))
+		_ = p.taskQueue.Ack(ctx, delivery)
+		return
+	}
+
+	shouldAck := p.processWithRetry(ctx, delivery.TaskID, delivery.MessageID)
+	if shouldAck {
+		if err := p.taskQueue.Ack(ctx, delivery); err != nil {
+			log.Printf("task ack error task_id=%s message_id=%s err=%v", delivery.TaskID, delivery.MessageID, err)
+		}
 	}
 }
 
 // processWithRetry 在未取消前提下执行有界重试。
-func (p *TaskProcessor) processWithRetry(ctx context.Context, taskID string) {
+func (p *TaskProcessor) processWithRetry(ctx context.Context, taskID string, messageIDs ...string) bool {
+	messageID := ""
+	if len(messageIDs) > 0 {
+		messageID = messageIDs[0]
+	}
+
 	for attempt := 1; attempt <= p.options.MaxAttempts; attempt++ {
+		if ctx.Err() != nil {
+			return false
+		}
 		// 已取消任务直接走终结流程，不再继续执行。
 		if p.isCanceled(taskID) {
 			p.finalizeCanceled(taskID)
-			return
+			return true
+		}
+
+		acquired, shouldAck := p.acquireExecutionLease(taskID)
+		if !acquired {
+			return shouldAck
 		}
 
 		if attempt > 1 {
@@ -119,22 +225,26 @@ func (p *TaskProcessor) processWithRetry(ctx context.Context, taskID string) {
 			})
 		}
 
-		err := p.processTask(ctx, taskID)
+		err := p.processTask(ctx, taskID, messageID)
 		if err == nil {
 			_ = p.taskStore.ClearDeadLetter(taskID)
-			return
+			return true
+		}
+
+		if ctx.Err() != nil && !p.isCanceled(taskID) {
+			return false
 		}
 
 		// 取消属于终态，但不计入“失败重试”。
 		if errors.Is(err, ErrTaskCanceled) {
 			p.finalizeCanceled(taskID)
-			return
+			return true
 		}
 
 		log.Printf("task processing failed task_id=%s attempt=%d err=%v", taskID, attempt, err)
 		if !isRetryableProcessingError(err) {
 			p.finalizeFailed(taskID, err, attempt)
-			return
+			return true
 		}
 
 		if attempt < p.options.MaxAttempts {
@@ -144,17 +254,28 @@ func (p *TaskProcessor) processWithRetry(ctx context.Context, taskID string) {
 				EmittedAtUnixMS: time.Now().UTC().UnixMilli(),
 			})
 
-			time.Sleep(p.options.RetryBackoff)
+			select {
+			case <-ctx.Done():
+				return false
+			case <-time.After(p.options.RetryBackoff):
+			}
 			continue
 		}
 
 		// 最后一轮重试仍失败：标记失败并写入死信集合。
 		p.finalizeFailed(taskID, err, attempt)
+		return true
 	}
+	return true
 }
 
 // processTask 执行任务的一次尝试，并持久化收到的全部事件。
-func (p *TaskProcessor) processTask(parentCtx context.Context, taskID string) error {
+func (p *TaskProcessor) processTask(parentCtx context.Context, taskID string, messageIDs ...string) error {
+	messageID := ""
+	if len(messageIDs) > 0 {
+		messageID = messageIDs[0]
+	}
+
 	task, ok := p.taskStore.Get(taskID)
 	if !ok {
 		// 任务不存在（被删除或未创建），无需处理。
@@ -164,12 +285,9 @@ func (p *TaskProcessor) processTask(parentCtx context.Context, taskID string) er
 		return ErrTaskCanceled
 	}
 
-	// 在调用 AI Runtime 前切换为 running。
-	p.taskStore.UpdateStatus(taskID, domain.TaskRunning, "")
-
 	// 每次尝试都绑定独立执行超时。
 	execCtx, cancel := context.WithTimeout(parentCtx, p.options.ExecutionTimeout)
-	p.registerActive(taskID, cancel)
+	p.registerActive(taskID, messageID, cancel)
 	defer func() {
 		p.unregisterActive(taskID)
 		cancel()
@@ -392,10 +510,38 @@ func payloadInt(payload map[string]any, keys ...string) int {
 }
 
 // registerActive 记录当前活跃任务，供取消接口定位。
-func (p *TaskProcessor) registerActive(taskID string, cancel context.CancelFunc) {
+func (p *TaskProcessor) acquireExecutionLease(taskID string) (bool, bool) {
+	leaseUntil := time.Now().UTC().Add(p.options.VisibilityTimeout)
+	task, acquired, err := p.taskStore.AcquireExecutionLease(taskID, p.options.ConsumerName, leaseUntil)
+	if err != nil {
+		log.Printf("task lease acquire error task_id=%s consumer=%s err=%v", taskID, p.options.ConsumerName, err)
+		return false, false
+	}
+	if acquired {
+		return true, false
+	}
+	if task.ID == "" {
+		return false, true
+	}
+	switch task.Status {
+	case domain.TaskPaused, domain.TaskCompleted, domain.TaskFailed, domain.TaskCanceled:
+		return false, true
+	default:
+		return false, true
+	}
+}
+
+func (p *TaskProcessor) activeDelivery(taskID string) (activeExecution, bool) {
 	p.activeMu.Lock()
 	defer p.activeMu.Unlock()
-	p.active[taskID] = cancel
+	active, exists := p.active[taskID]
+	return active, exists
+}
+
+func (p *TaskProcessor) registerActive(taskID string, messageID string, cancel context.CancelFunc) {
+	p.activeMu.Lock()
+	defer p.activeMu.Unlock()
+	p.active[taskID] = activeExecution{cancel: cancel, messageID: messageID}
 }
 
 // unregisterActive 在尝试结束后移除活跃任务记录。
@@ -519,4 +665,11 @@ func readMetadataBool(value string, defaultValue bool) bool {
 	default:
 		return defaultValue
 	}
+}
+
+func shouldDeadLetterPoisonDelivery(delivery queue.Delivery, maxAttempts int) bool {
+	if maxAttempts <= 0 || delivery.DeliveryCount <= 0 {
+		return false
+	}
+	return delivery.DeliveryCount > int64(maxAttempts)
 }

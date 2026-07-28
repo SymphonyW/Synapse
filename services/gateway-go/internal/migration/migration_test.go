@@ -80,8 +80,8 @@ func TestPostgresMigrationLifecycle(t *testing.T) {
 	if state.Version != migration.RequiredVersion-1 || state.Dirty {
 		t.Fatalf("unexpected version after down: %+v", state)
 	}
-	if hasColumn(ctx, t, db, "task_events", "payload") {
-		t.Fatal("expected agent event v2 payload column to be removed after down")
+	if hasColumn(ctx, t, db, "tasks", "execution_owner") {
+		t.Fatal("expected execution lease column to be removed after down")
 	}
 
 	if err := migration.Up(opts); err != nil {
@@ -104,20 +104,28 @@ func TestPostgresBaselineExistingEnsureSchemaDatabase(t *testing.T) {
 		t.Fatalf("create ensureSchema equivalent: %v", err)
 	}
 
-	if err := migration.Baseline(ctx, opts, migration.RequiredVersion); err != nil {
+	if err := migration.Baseline(ctx, opts, 4); err != nil {
 		t.Fatalf("baseline compatible schema: %v", err)
 	}
 	state, err := migration.CurrentVersion(ctx, db)
 	if err != nil {
 		t.Fatalf("current version after baseline: %v", err)
 	}
-	if !state.Initialized || state.Version != migration.RequiredVersion || state.Dirty {
+	if !state.Initialized || state.Version != 4 || state.Dirty {
 		t.Fatalf("unexpected baseline state: %+v", state)
+	}
+
+	if _, err := store.NewPostgres(ctx, databaseURL); err == nil {
+		t.Fatal("expected NewPostgres to reject baseline v4 before v5 migration")
+	}
+
+	if err := migration.Up(opts); err != nil {
+		t.Fatalf("migrate up after baseline: %v", err)
 	}
 
 	postgresStore, err := store.NewPostgres(ctx, databaseURL)
 	if err != nil {
-		t.Fatalf("NewPostgres after baseline: %v", err)
+		t.Fatalf("NewPostgres after baseline and migrate up: %v", err)
 	}
 	_ = postgresStore.Close()
 }

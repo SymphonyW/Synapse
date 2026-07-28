@@ -16,6 +16,8 @@ import (
 // dbOperationTimeout 为单次数据库操作设置上限，避免在数据库压力下无限阻塞。
 const dbOperationTimeout = 3 * time.Second
 
+const taskColumns = `id, user_id, prompt, status, error, replay_of_task_id, metadata, execution_owner, execution_lease_until, execution_attempt, created_at, updated_at`
+
 // PostgresStore 是基于 PostgreSQL 的持久化 TaskStore 实现。
 type PostgresStore struct {
 	db *sql.DB
@@ -98,7 +100,7 @@ func (s *PostgresStore) Get(taskID string) (domain.Task, bool) {
 
 	row := s.db.QueryRowContext(
 		ctx,
-		`SELECT id, user_id, prompt, status, error, replay_of_task_id, metadata, created_at, updated_at
+		`SELECT `+taskColumns+`
 		 FROM tasks WHERE id = $1`,
 		taskID,
 	)
@@ -124,7 +126,7 @@ func (s *PostgresStore) ListTasks(limit int, status string) ([]domain.Task, erro
 	defer cancel()
 
 	// 仅在存在 status 过滤时动态拼接 SQL，仍保持占位符安全与顺序一致。
-	query := `SELECT id, user_id, prompt, status, error, replay_of_task_id, metadata, created_at, updated_at
+	query := `SELECT ` + taskColumns + `
 		 FROM tasks`
 	args := make([]any, 0, 2)
 	if status != "" {
@@ -169,7 +171,7 @@ func (s *PostgresStore) ListReplays(taskID string, limit int) ([]domain.Task, er
 
 	rows, err := s.db.QueryContext(
 		ctx,
-		`SELECT id, user_id, prompt, status, error, replay_of_task_id, metadata, created_at, updated_at
+		`SELECT `+taskColumns+`
 		 FROM tasks
 		 WHERE replay_of_task_id = $1
 		 ORDER BY created_at DESC
@@ -214,7 +216,7 @@ func (s *PostgresStore) ListTasksByConversation(userID string, conversationID st
 
 	rows, err := s.db.QueryContext(
 		ctx,
-		`SELECT id, user_id, prompt, status, error, replay_of_task_id, metadata, created_at, updated_at
+		`SELECT `+taskColumns+`
 		 FROM tasks
 		 WHERE user_id = $1
 		   AND (
@@ -304,9 +306,13 @@ func (s *PostgresStore) UpdateStatus(taskID string, status domain.TaskStatus, er
 	row := s.db.QueryRowContext(
 		ctx,
 		`UPDATE tasks
-		 SET status = $2, error = $3, updated_at = NOW()
+		 SET status = $2,
+		     error = $3,
+		     execution_owner = CASE WHEN $2 = 'running' THEN execution_owner ELSE '' END,
+		     execution_lease_until = CASE WHEN $2 = 'running' THEN execution_lease_until ELSE NULL END,
+		     updated_at = NOW()
 		 WHERE id = $1
-		 RETURNING id, user_id, prompt, status, error, replay_of_task_id, metadata, created_at, updated_at`,
+		 RETURNING `+taskColumns,
 		taskID,
 		string(status),
 		errorMessage,
@@ -321,6 +327,52 @@ func (s *PostgresStore) UpdateStatus(taskID string, status domain.TaskStatus, er
 	}
 
 	return task, true
+}
+
+// AcquireExecutionLease 原子获取 queued 或过期 running 任务的执行权。
+func (s *PostgresStore) AcquireExecutionLease(taskID string, owner string, leaseUntil time.Time) (domain.Task, bool, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), dbOperationTimeout)
+	defer cancel()
+
+	row := s.db.QueryRowContext(
+		ctx,
+		`UPDATE tasks
+		 SET status = 'running',
+		     error = '',
+		     execution_owner = $2,
+		     execution_lease_until = $3,
+		     execution_attempt = execution_attempt + 1,
+		     updated_at = NOW()
+		 WHERE id = $1
+		   AND (
+		     status = 'queued'
+		     OR (
+		       status = 'running'
+		       AND (
+		         execution_owner = $2
+		         OR execution_lease_until IS NULL
+		         OR execution_lease_until < NOW()
+		       )
+		     )
+		   )
+		 RETURNING `+taskColumns,
+		taskID,
+		owner,
+		leaseUntil.UTC(),
+	)
+
+	task, err := scanTask(row)
+	if errors.Is(err, sql.ErrNoRows) {
+		if task, ok := s.Get(taskID); ok {
+			return task, false, nil
+		}
+		return domain.Task{}, false, nil
+	}
+	if err != nil {
+		return domain.Task{}, false, err
+	}
+
+	return task, true, nil
 }
 
 // UpdateMetadata 合并更新任务 metadata，空值表示删除对应 key。
@@ -369,7 +421,7 @@ func (s *PostgresStore) UpdateMetadata(taskID string, metadataUpdates map[string
 		`UPDATE tasks
 		 SET metadata = $2, updated_at = NOW()
 		 WHERE id = $1
-		 RETURNING id, user_id, prompt, status, error, replay_of_task_id, metadata, created_at, updated_at`,
+		 RETURNING `+taskColumns,
 		taskID,
 		metadataJSON,
 	)
@@ -899,6 +951,8 @@ func scanTask(scanner rowScanner) (domain.Task, error) {
 	var metadataRaw []byte
 	var status string
 	var replayOfTaskID sql.NullString
+	var executionOwner sql.NullString
+	var executionLeaseUntil sql.NullTime
 
 	if err := scanner.Scan(
 		&task.ID,
@@ -908,6 +962,9 @@ func scanTask(scanner rowScanner) (domain.Task, error) {
 		&task.Error,
 		&replayOfTaskID,
 		&metadataRaw,
+		&executionOwner,
+		&executionLeaseUntil,
+		&task.ExecutionAttempt,
 		&task.CreatedAt,
 		&task.UpdatedAt,
 	); err != nil {
@@ -917,6 +974,12 @@ func scanTask(scanner rowScanner) (domain.Task, error) {
 	task.Status = domain.TaskStatus(status)
 	if replayOfTaskID.Valid {
 		task.ReplayOfTaskID = replayOfTaskID.String
+	}
+	if executionOwner.Valid {
+		task.ExecutionOwner = executionOwner.String
+	}
+	if executionLeaseUntil.Valid {
+		task.ExecutionLeaseUntil = executionLeaseUntil.Time
 	}
 	if len(metadataRaw) > 0 {
 		if err := json.Unmarshal(metadataRaw, &task.Metadata); err != nil {

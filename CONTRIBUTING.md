@@ -39,6 +39,10 @@ Set-Location services/gateway-go
 go test ./...
 Set-Location ..\..
 
+# Gateway PostgreSQL migration
+.\scripts\dev.ps1 -Task migrate-status
+.\scripts\dev.ps1 -Task migrate-up
+
 # AI Engine
 Set-Location services/ai-engine-py
 python -m unittest discover -s tests -p "test_*.py"
@@ -115,6 +119,35 @@ CI job responsibilities:
 
 Mock regression is deterministic and must not use real model API keys. Live benchmark is for provider integration and quality checks; it may require provider credentials and should stay outside required PR CI unless explicitly requested.
 
+## Database Migration
+
+Gateway PostgreSQL schema is versioned under `services/gateway-go/migrations`. Runtime startup does not create or alter tables.
+
+| Task | Command |
+|---|---|
+| Initialize or upgrade local DB | `.\scripts\dev.ps1 -Task migrate-up` |
+| Show version and dirty state | `.\scripts\dev.ps1 -Task migrate-status` |
+| Create next migration pair | `.\scripts\dev.ps1 -Task migrate-create -Name short_name` |
+| Roll back one step | `.\scripts\dev.ps1 -Task migrate-down -Steps 1` |
+| Baseline old ensureSchema DB | `.\scripts\dev.ps1 -Task migrate-baseline -Version 4` then `.\scripts\dev.ps1 -Task migrate-up` |
+
+Before a PR that changes Gateway storage, auth/session persistence, task events, tool policy, Compose, or migration SQL, run Gateway tests and at least `migrate-up` plus `migrate-status` against a disposable Postgres database. Down migrations can delete data; back up real databases before using them outside disposable environments.
+
+Queue changes should keep the `TaskQueue` Delivery/Ack/Reclaim contract intact. For Redis Streams integration tests, run with `SYNAPSE_TEST_REDIS_ADDR=127.0.0.1:6379`; without that env the tests skip and normal `go test ./...` stays local-only.
+
+## AgentEvent V2 Migration
+
+Agent runtime info events are migrating from legacy JSON-in-`message` to typed protobuf payloads:
+
+| Stage | Behavior |
+|---|---|
+| 1 | AI Engine double-writes typed `AgentEvent` payloads and the legacy JSON `message`. |
+| 2 | Gateway reads typed payloads first, falls back to legacy JSON, and persists structured `payload` plus `schema_version`. |
+| 3 | Web reads `schema_version`, `event_name`, and `payload` first, then falls back to `parseAgentInfoEnvelope(message)` for historical V1 events. |
+| 4 | Legacy removal is a future compatibility decision and must not happen in this phase. |
+
+When changing Agent event fields, update `proto/synapse/v1/agent.proto`, regenerate Go/Python code, keep legacy JSON fields compatible, and run the Python, Gateway, Web, and proto checks listed above.
+
 ## 文档同步原则
 
 | 如果你改了 | 也请同步 |
@@ -129,6 +162,7 @@ Mock regression is deterministic and must not use real model API keys. Live benc
 - [ ] 改动范围清楚，未把无关重构塞进同一个 PR；
 - [ ] 相关测试已运行，失败原因已说明；
 - [ ] 新增行为有对应文档；
+- [ ] 数据库 schema 改动有 migration、down 风险说明和升级文档；
 - [ ] 新增配置有 `.example` 或安全说明；
 - [ ] README / Demo / 文档入口没有坏链；
 - [ ] 如果改了治理、审批或外联边界，已经额外检查默认安全行为。

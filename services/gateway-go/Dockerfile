@@ -31,8 +31,11 @@ RUN protoc -I proto \
 WORKDIR /src/services/gateway-go
 RUN go mod download
 RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o /bin/gateway ./cmd/server
+RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o /bin/migrate ./cmd/migrate
 
 FROM ${RUNTIME_BASE}
 COPY --from=builder /bin/gateway /gateway
+COPY --from=builder /bin/migrate /migrate
+COPY --from=builder /src/services/gateway-go/migrations /migrations
 EXPOSE 8080
 ENTRYPOINT ["/gateway"]

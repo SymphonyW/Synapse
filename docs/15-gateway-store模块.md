@@ -60,6 +60,6 @@ TaskStore 接口覆盖：
 
 ## 7. 生产建议
 
-1. 使用 migration 工具替代启动自动建表。
+1. 后续 schema 改动必须新增 `services/gateway-go/migrations` 下的 up/down migration。
 2. 对任务列表接口增加分页和复合索引优化。
 3. 增加数据库连接池参数配置项与指标导出。

@@ -52,7 +52,19 @@ TaskProcessor 依赖：
 4. 写入 failed + dead_lettered 事件。
 5. paused 不属于失败终态，不会直接进入死信。
 
-## 8. 扩展建议
+## 8. Ack 与 Reclaim
+
+| 状态 | Ack |
+|---|---|
+| completed | 是 |
+| paused | 是，审批通过后重新入队 |
+| canceled | 是 |
+| failed + dead_lettered | 是 |
+| Gateway 进程崩溃 | 否，由 Reclaim 恢复 |
+
+Worker 启动后台 reclaim loop，周期性调用 `TaskQueue.Reclaim`。执行前通过 `TaskStore.AcquireExecutionLease` 原子获取任务执行权；只有 queued 或 lease 过期的 running 任务会进入执行。
+
+## 9. 扩展建议
 
 1. 目前 Run 为串行消费，可扩展为可控并发 worker pool。
 2. 增加任务级超时、优先级、隔离队列等能力。

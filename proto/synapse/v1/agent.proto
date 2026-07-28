@@ -38,6 +38,168 @@ message AgentEvent {
   string token = 3;
   string trace_id = 4;
   int64 emitted_at_unix_ms = 5;
+  string schema_version = 6;
+
+  oneof typed_payload {
+    PerceiveEvent perceive = 20;
+    PlanEvent plan = 21;
+    ToolSelectedEvent tool_selected = 22;
+    ToolStartedEvent tool_started = 23;
+    ToolFinishedEvent tool_finished = 24;
+    ApprovalRequiredEvent approval_required = 25;
+    MemoryRecallEvent memory_recall = 26;
+    MemoryWriteEvent memory_write = 27;
+    EvaluationEvent evaluation = 28;
+    ReplanEvent replan = 29;
+    SynthesisModeEvent synthesis_mode = 30;
+    ToolFailedEvent tool_failed = 31;
+    ToolSkippedEvent tool_skipped = 32;
+  }
+}
+
+message PerceiveEvent {
+  string task_id = 1;
+  int32 short_context_count = 2;
+  int32 recalled_memory_count = 3;
+}
+
+message PlanEvent {
+  int32 step_count = 1;
+  repeated string steps = 2;
+}
+
+message ToolSelectedEvent {
+  int32 step_index = 1;
+  string objective = 2;
+  string tool_name = 3;
+  string tool_call_id = 4;
+  string risk_level = 5;
+  string input_preview = 6;
+  bool requires_approval = 7;
+  string provider_name = 8;
+}
+
+message ToolStartedEvent {
+  int32 step_index = 1;
+  string objective = 2;
+  string tool_name = 3;
+  string tool_call_id = 4;
+  string risk_level = 5;
+  string input_preview = 6;
+  bool requires_approval = 7;
+  string provider_name = 8;
+}
+
+message ToolFinishedEvent {
+  int32 step_index = 1;
+  string objective = 2;
+  string tool_name = 3;
+  string tool_call_id = 4;
+  string risk_level = 5;
+  string input_preview = 6;
+  string output_preview = 7;
+  int64 duration_ms = 8;
+  bool ok = 9;
+  string error_code = 10;
+  string error_message = 11;
+  bool requires_approval = 12;
+  string provider_name = 13;
+}
+
+message ToolFailedEvent {
+  int32 step_index = 1;
+  string objective = 2;
+  string tool_name = 3;
+  string tool_call_id = 4;
+  string risk_level = 5;
+  string input_preview = 6;
+  string output_preview = 7;
+  int64 duration_ms = 8;
+  bool ok = 9;
+  string error_code = 10;
+  string error_message = 11;
+  bool requires_approval = 12;
+  string provider_name = 13;
+}
+
+message ToolSkippedEvent {
+  int32 step_index = 1;
+  string objective = 2;
+  string tool_name = 3;
+  string tool_call_id = 4;
+  string risk_level = 5;
+  string input_preview = 6;
+  string reason = 7;
+  bool requires_approval = 8;
+  string provider_name = 9;
+}
+
+message ApprovedToolCallEvent {
+  string tool_name = 1;
+  string tool_input = 2;
+  string risk_level = 3;
+  string reason = 4;
+  int32 resume_step_index = 5;
+}
+
+message ApprovalRequiredEvent {
+  int32 step_index = 1;
+  int32 resume_step_index = 2;
+  string tool_name = 3;
+  string tool_input = 4;
+  string risk_level = 5;
+  string reason = 6;
+  string tool_call_id = 7;
+  string approval_reason = 8;
+  ApprovedToolCallEvent approved_tool_call = 9;
+  string objective = 10;
+}
+
+message MemoryEventHit {
+  string memory_id = 1;
+  string summary = 2;
+  string content_preview = 3;
+  string source_task_id = 4;
+  double importance = 5;
+  double score = 6;
+  repeated string matched_terms = 7;
+  int64 created_at = 8;
+}
+
+message MemoryRecallEvent {
+  string query = 1;
+  int32 hit_count = 2;
+  repeated MemoryEventHit hits = 3;
+}
+
+message MemoryWriteEvent {
+  string memory_id = 1;
+  string user_id = 2;
+  string summary = 3;
+  string content_preview = 4;
+  string source_task_id = 5;
+  double importance = 6;
+  int64 created_at = 7;
+}
+
+message EvaluationEvent {
+  double estimated_success = 1;
+  double objective_completion = 2;
+  double tool_success_rate = 3;
+  int32 blocked_actions = 4;
+  int64 duration_ms = 5;
+}
+
+message ReplanEvent {
+  int32 step_index = 1;
+  string reason = 2;
+  string from_tool = 3;
+  string to_tool = 4;
+  string to_tool_input = 5;
+}
+
+message SynthesisModeEvent {
+  string mode = 1;
 }
 
 // 长期记忆记录，和 AI Engine 内部 MemoryStore 结构保持同名字段。

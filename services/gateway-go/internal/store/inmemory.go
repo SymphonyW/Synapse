@@ -1,6 +1,7 @@
 package store
 
 import (
+	"encoding/json"
 	"errors"
 	"sort"
 	"strings"
@@ -213,10 +214,41 @@ func (s *InMemoryStore) UpdateStatus(taskID string, status domain.TaskStatus, er
 
 	task.Status = status
 	task.Error = errorMessage
+	if status != domain.TaskRunning {
+		task.ExecutionOwner = ""
+		task.ExecutionLeaseUntil = time.Time{}
+	}
 	task.UpdatedAt = time.Now().UTC()
 	s.tasks[taskID] = task
 
 	return cloneTask(task), true
+}
+
+// AcquireExecutionLease 原子获取 queued 或过期 running 任务的执行权。
+func (s *InMemoryStore) AcquireExecutionLease(taskID string, owner string, leaseUntil time.Time) (domain.Task, bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	task, ok := s.tasks[taskID]
+	if !ok {
+		return domain.Task{}, false, nil
+	}
+
+	now := time.Now().UTC()
+	canAcquire := task.Status == domain.TaskQueued ||
+		(task.Status == domain.TaskRunning && (task.ExecutionOwner == owner || task.ExecutionLeaseUntil.IsZero() || task.ExecutionLeaseUntil.Before(now)))
+	if !canAcquire {
+		return cloneTask(task), false, nil
+	}
+
+	task.Status = domain.TaskRunning
+	task.Error = ""
+	task.ExecutionOwner = owner
+	task.ExecutionLeaseUntil = leaseUntil.UTC()
+	task.ExecutionAttempt++
+	task.UpdatedAt = now
+	s.tasks[taskID] = task
+	return cloneTask(task), true, nil
 }
 
 // UpdateMetadata 合并更新任务 metadata，空值表示删除对应 key。
@@ -582,7 +614,22 @@ func cloneToolPolicy(policy domain.ToolPolicy) domain.ToolPolicy {
 	return copyPolicy
 }
 
-// cloneEvent 目前事件是值类型，直接返回即可；保留该函数便于未来扩展。
 func cloneEvent(event domain.TaskEvent) domain.TaskEvent {
-	return event
+	copyEvent := event
+	if event.Payload == nil {
+		return copyEvent
+	}
+
+	raw, err := json.Marshal(event.Payload)
+	if err != nil {
+		copyEvent.Payload = map[string]any{}
+		return copyEvent
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(raw, &payload); err != nil {
+		copyEvent.Payload = map[string]any{}
+		return copyEvent
+	}
+	copyEvent.Payload = payload
+	return copyEvent
 }

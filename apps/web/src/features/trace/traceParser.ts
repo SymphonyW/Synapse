@@ -68,6 +68,26 @@ export function parseAgentInfoEnvelope(message?: string): AgentInfoEnvelope | nu
   }
 }
 
+export function parseAgentInfoEvent(event: TraceRawEvent): AgentInfoEnvelope | null {
+  if (
+    typeof event.schema_version === 'string' &&
+    event.schema_version.trim() !== '' &&
+    typeof event.event_name === 'string' &&
+    event.event_name.trim() !== '' &&
+    (event.payload === undefined || isRecord(event.payload))
+  ) {
+    return {
+      schema: event.schema_version,
+      schema_version: event.schema_version,
+      agent_event: event.event_name,
+      event_name: event.event_name,
+      payload: event.payload,
+    }
+  }
+
+  return parseAgentInfoEnvelope(event.message)
+}
+
 function getOrCreateStep(steps: Map<number, TraceStep>, index: number, objective?: string): TraceStep {
   const current = steps.get(index)
   if (current) {
@@ -118,12 +138,13 @@ function createToolCall(
     objective: readString(payload, 'objective'),
     toolName: readString(payload, 'tool') ?? readString(payload, 'tool_name') ?? 'unknown',
     riskLevel: readString(payload, 'risk_level'),
-    inputPreview: readString(payload, 'tool_input'),
+    inputPreview: readString(payload, 'tool_input') ?? readString(payload, 'input_preview'),
     status,
     durationMs: readNumber(payload, 'duration_ms'),
     ok: readBoolean(payload, 'ok'),
     failureReason:
       readString(payload, 'reason') ??
+      readString(payload, 'error_message') ??
       (isRecord(payload?.error) ? readString(payload.error, 'message') : undefined),
     outputPreview: readString(payload, 'output_preview') ?? readString(payload, 'output'),
     requiresApproval: readBoolean(payload, 'requires_approval'),
@@ -147,11 +168,12 @@ function upsertToolCall(
 
   call.objective = call.objective ?? readString(payload, 'objective')
   call.riskLevel = readString(payload, 'risk_level') ?? call.riskLevel
-  call.inputPreview = readString(payload, 'tool_input') ?? call.inputPreview
+  call.inputPreview = readString(payload, 'tool_input') ?? readString(payload, 'input_preview') ?? call.inputPreview
   call.durationMs = readNumber(payload, 'duration_ms') ?? call.durationMs
   call.ok = readBoolean(payload, 'ok') ?? call.ok
   call.failureReason =
     readString(payload, 'reason') ??
+    readString(payload, 'error_message') ??
     (isRecord(payload?.error) ? readString(payload.error, 'message') : undefined) ??
     call.failureReason
   call.outputPreview = readString(payload, 'output_preview') ?? readString(payload, 'output') ?? call.outputPreview
@@ -320,7 +342,7 @@ export function parseTrace(events: TraceRawEvent[], task: TraceTaskContext): Par
       return
     }
 
-    const envelope = parseAgentInfoEnvelope(event.message)
+    const envelope = parseAgentInfoEvent(event)
     if (!envelope?.agent_event) {
       if (event.message?.trim()) {
         parseErrors.push(`event ${eventID(event, index)}: invalid agent info envelope`)

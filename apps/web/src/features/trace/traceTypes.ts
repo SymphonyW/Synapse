@@ -13,6 +13,9 @@ export type TraceRawEvent = {
   message?: string
   token?: string
   trace_id?: string
+  schema_version?: string
+  event_name?: string
+  payload?: Record<string, unknown>
   emitted_at_unix_ms?: number
   status?: string
   task_id?: string
@@ -31,7 +34,9 @@ export type TraceTaskContext = {
 
 export type AgentInfoEnvelope = {
   schema?: string
+  schema_version?: string
   agent_event?: string
+  event_name?: string
   display_message?: string
   payload?: Record<string, unknown>
 }

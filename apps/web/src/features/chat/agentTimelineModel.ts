@@ -3,7 +3,7 @@ import { truncatePreview } from '../../shared/utils/format'
 import {
   collectSourceLinks,
   isRecord,
-  parseAgentInfoEnvelope,
+  parseAgentInfoEvent,
   readRecordNumber,
   readRecordString,
   readStringArray,
@@ -112,7 +112,7 @@ export function buildAgentTimelineItems(
   const items: AgentTimelineItem[] = []
 
   taskEvents.forEach((event, index) => {
-    const envelope = parseAgentInfoEnvelope(event.message)
+    const envelope = parseAgentInfoEvent(event)
     if (!envelope?.agent_event) {
       return
     }
@@ -204,10 +204,10 @@ export function buildAgentTimelineItems(
     }
 
     if (envelope.agent_event.startsWith('tool_')) {
-      const toolName = readRecordString(payload, 'tool')
-      const toolInput = readRecordString(payload, 'tool_input')
+      const toolName = readRecordString(payload, 'tool') || readRecordString(payload, 'tool_name')
+      const toolInput = readRecordString(payload, 'tool_input') || readRecordString(payload, 'input_preview')
       const output = readRecordString(payload, 'output_preview') || readRecordString(payload, 'output')
-      const reason = readRecordString(payload, 'reason')
+      const reason = readRecordString(payload, 'reason') || readRecordString(payload, 'error_message')
       const riskLevel = readRecordString(payload, 'risk_level')
       const duration = readRecordNumber(payload, 'duration_ms')
       const links = collectSourceLinks(payload)

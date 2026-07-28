@@ -247,8 +247,25 @@ type AgentEvent struct {
 	Token           string                 `protobuf:"bytes,3,opt,name=token,proto3" json:"token,omitempty"`
 	TraceId         string                 `protobuf:"bytes,4,opt,name=trace_id,json=traceId,proto3" json:"trace_id,omitempty"`
 	EmittedAtUnixMs int64                  `protobuf:"varint,5,opt,name=emitted_at_unix_ms,json=emittedAtUnixMs,proto3" json:"emitted_at_unix_ms,omitempty"`
-	unknownFields   protoimpl.UnknownFields
-	sizeCache       protoimpl.SizeCache
+	SchemaVersion   string                 `protobuf:"bytes,6,opt,name=schema_version,json=schemaVersion,proto3" json:"schema_version,omitempty"`
+	// Types that are valid to be assigned to TypedPayload:
+	//
+	//	*AgentEvent_Perceive
+	//	*AgentEvent_Plan
+	//	*AgentEvent_ToolSelected
+	//	*AgentEvent_ToolStarted
+	//	*AgentEvent_ToolFinished
+	//	*AgentEvent_ApprovalRequired
+	//	*AgentEvent_MemoryRecall
+	//	*AgentEvent_MemoryWrite
+	//	*AgentEvent_Evaluation
+	//	*AgentEvent_Replan
+	//	*AgentEvent_SynthesisMode
+	//	*AgentEvent_ToolFailed
+	//	*AgentEvent_ToolSkipped
+	TypedPayload  isAgentEvent_TypedPayload `protobuf_oneof:"typed_payload"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *AgentEvent) Reset() {
@@ -316,6 +333,1559 @@ func (x *AgentEvent) GetEmittedAtUnixMs() int64 {
 	return 0
 }
 
+func (x *AgentEvent) GetSchemaVersion() string {
+	if x != nil {
+		return x.SchemaVersion
+	}
+	return ""
+}
+
+func (x *AgentEvent) GetTypedPayload() isAgentEvent_TypedPayload {
+	if x != nil {
+		return x.TypedPayload
+	}
+	return nil
+}
+
+func (x *AgentEvent) GetPerceive() *PerceiveEvent {
+	if x != nil {
+		if x, ok := x.TypedPayload.(*AgentEvent_Perceive); ok {
+			return x.Perceive
+		}
+	}
+	return nil
+}
+
+func (x *AgentEvent) GetPlan() *PlanEvent {
+	if x != nil {
+		if x, ok := x.TypedPayload.(*AgentEvent_Plan); ok {
+			return x.Plan
+		}
+	}
+	return nil
+}
+
+func (x *AgentEvent) GetToolSelected() *ToolSelectedEvent {
+	if x != nil {
+		if x, ok := x.TypedPayload.(*AgentEvent_ToolSelected); ok {
+			return x.ToolSelected
+		}
+	}
+	return nil
+}
+
+func (x *AgentEvent) GetToolStarted() *ToolStartedEvent {
+	if x != nil {
+		if x, ok := x.TypedPayload.(*AgentEvent_ToolStarted); ok {
+			return x.ToolStarted
+		}
+	}
+	return nil
+}
+
+func (x *AgentEvent) GetToolFinished() *ToolFinishedEvent {
+	if x != nil {
+		if x, ok := x.TypedPayload.(*AgentEvent_ToolFinished); ok {
+			return x.ToolFinished
+		}
+	}
+	return nil
+}
+
+func (x *AgentEvent) GetApprovalRequired() *ApprovalRequiredEvent {
+	if x != nil {
+		if x, ok := x.TypedPayload.(*AgentEvent_ApprovalRequired); ok {
+			return x.ApprovalRequired
+		}
+	}
+	return nil
+}
+
+func (x *AgentEvent) GetMemoryRecall() *MemoryRecallEvent {
+	if x != nil {
+		if x, ok := x.TypedPayload.(*AgentEvent_MemoryRecall); ok {
+			return x.MemoryRecall
+		}
+	}
+	return nil
+}
+
+func (x *AgentEvent) GetMemoryWrite() *MemoryWriteEvent {
+	if x != nil {
+		if x, ok := x.TypedPayload.(*AgentEvent_MemoryWrite); ok {
+			return x.MemoryWrite
+		}
+	}
+	return nil
+}
+
+func (x *AgentEvent) GetEvaluation() *EvaluationEvent {
+	if x != nil {
+		if x, ok := x.TypedPayload.(*AgentEvent_Evaluation); ok {
+			return x.Evaluation
+		}
+	}
+	return nil
+}
+
+func (x *AgentEvent) GetReplan() *ReplanEvent {
+	if x != nil {
+		if x, ok := x.TypedPayload.(*AgentEvent_Replan); ok {
+			return x.Replan
+		}
+	}
+	return nil
+}
+
+func (x *AgentEvent) GetSynthesisMode() *SynthesisModeEvent {
+	if x != nil {
+		if x, ok := x.TypedPayload.(*AgentEvent_SynthesisMode); ok {
+			return x.SynthesisMode
+		}
+	}
+	return nil
+}
+
+func (x *AgentEvent) GetToolFailed() *ToolFailedEvent {
+	if x != nil {
+		if x, ok := x.TypedPayload.(*AgentEvent_ToolFailed); ok {
+			return x.ToolFailed
+		}
+	}
+	return nil
+}
+
+func (x *AgentEvent) GetToolSkipped() *ToolSkippedEvent {
+	if x != nil {
+		if x, ok := x.TypedPayload.(*AgentEvent_ToolSkipped); ok {
+			return x.ToolSkipped
+		}
+	}
+	return nil
+}
+
+type isAgentEvent_TypedPayload interface {
+	isAgentEvent_TypedPayload()
+}
+
+type AgentEvent_Perceive struct {
+	Perceive *PerceiveEvent `protobuf:"bytes,20,opt,name=perceive,proto3,oneof"`
+}
+
+type AgentEvent_Plan struct {
+	Plan *PlanEvent `protobuf:"bytes,21,opt,name=plan,proto3,oneof"`
+}
+
+type AgentEvent_ToolSelected struct {
+	ToolSelected *ToolSelectedEvent `protobuf:"bytes,22,opt,name=tool_selected,json=toolSelected,proto3,oneof"`
+}
+
+type AgentEvent_ToolStarted struct {
+	ToolStarted *ToolStartedEvent `protobuf:"bytes,23,opt,name=tool_started,json=toolStarted,proto3,oneof"`
+}
+
+type AgentEvent_ToolFinished struct {
+	ToolFinished *ToolFinishedEvent `protobuf:"bytes,24,opt,name=tool_finished,json=toolFinished,proto3,oneof"`
+}
+
+type AgentEvent_ApprovalRequired struct {
+	ApprovalRequired *ApprovalRequiredEvent `protobuf:"bytes,25,opt,name=approval_required,json=approvalRequired,proto3,oneof"`
+}
+
+type AgentEvent_MemoryRecall struct {
+	MemoryRecall *MemoryRecallEvent `protobuf:"bytes,26,opt,name=memory_recall,json=memoryRecall,proto3,oneof"`
+}
+
+type AgentEvent_MemoryWrite struct {
+	MemoryWrite *MemoryWriteEvent `protobuf:"bytes,27,opt,name=memory_write,json=memoryWrite,proto3,oneof"`
+}
+
+type AgentEvent_Evaluation struct {
+	Evaluation *EvaluationEvent `protobuf:"bytes,28,opt,name=evaluation,proto3,oneof"`
+}
+
+type AgentEvent_Replan struct {
+	Replan *ReplanEvent `protobuf:"bytes,29,opt,name=replan,proto3,oneof"`
+}
+
+type AgentEvent_SynthesisMode struct {
+	SynthesisMode *SynthesisModeEvent `protobuf:"bytes,30,opt,name=synthesis_mode,json=synthesisMode,proto3,oneof"`
+}
+
+type AgentEvent_ToolFailed struct {
+	ToolFailed *ToolFailedEvent `protobuf:"bytes,31,opt,name=tool_failed,json=toolFailed,proto3,oneof"`
+}
+
+type AgentEvent_ToolSkipped struct {
+	ToolSkipped *ToolSkippedEvent `protobuf:"bytes,32,opt,name=tool_skipped,json=toolSkipped,proto3,oneof"`
+}
+
+func (*AgentEvent_Perceive) isAgentEvent_TypedPayload() {}
+
+func (*AgentEvent_Plan) isAgentEvent_TypedPayload() {}
+
+func (*AgentEvent_ToolSelected) isAgentEvent_TypedPayload() {}
+
+func (*AgentEvent_ToolStarted) isAgentEvent_TypedPayload() {}
+
+func (*AgentEvent_ToolFinished) isAgentEvent_TypedPayload() {}
+
+func (*AgentEvent_ApprovalRequired) isAgentEvent_TypedPayload() {}
+
+func (*AgentEvent_MemoryRecall) isAgentEvent_TypedPayload() {}
+
+func (*AgentEvent_MemoryWrite) isAgentEvent_TypedPayload() {}
+
+func (*AgentEvent_Evaluation) isAgentEvent_TypedPayload() {}
+
+func (*AgentEvent_Replan) isAgentEvent_TypedPayload() {}
+
+func (*AgentEvent_SynthesisMode) isAgentEvent_TypedPayload() {}
+
+func (*AgentEvent_ToolFailed) isAgentEvent_TypedPayload() {}
+
+func (*AgentEvent_ToolSkipped) isAgentEvent_TypedPayload() {}
+
+type PerceiveEvent struct {
+	state               protoimpl.MessageState `protogen:"open.v1"`
+	TaskId              string                 `protobuf:"bytes,1,opt,name=task_id,json=taskId,proto3" json:"task_id,omitempty"`
+	ShortContextCount   int32                  `protobuf:"varint,2,opt,name=short_context_count,json=shortContextCount,proto3" json:"short_context_count,omitempty"`
+	RecalledMemoryCount int32                  `protobuf:"varint,3,opt,name=recalled_memory_count,json=recalledMemoryCount,proto3" json:"recalled_memory_count,omitempty"`
+	unknownFields       protoimpl.UnknownFields
+	sizeCache           protoimpl.SizeCache
+}
+
+func (x *PerceiveEvent) Reset() {
+	*x = PerceiveEvent{}
+	mi := &file_synapse_v1_agent_proto_msgTypes[4]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *PerceiveEvent) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*PerceiveEvent) ProtoMessage() {}
+
+func (x *PerceiveEvent) ProtoReflect() protoreflect.Message {
+	mi := &file_synapse_v1_agent_proto_msgTypes[4]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use PerceiveEvent.ProtoReflect.Descriptor instead.
+func (*PerceiveEvent) Descriptor() ([]byte, []int) {
+	return file_synapse_v1_agent_proto_rawDescGZIP(), []int{4}
+}
+
+func (x *PerceiveEvent) GetTaskId() string {
+	if x != nil {
+		return x.TaskId
+	}
+	return ""
+}
+
+func (x *PerceiveEvent) GetShortContextCount() int32 {
+	if x != nil {
+		return x.ShortContextCount
+	}
+	return 0
+}
+
+func (x *PerceiveEvent) GetRecalledMemoryCount() int32 {
+	if x != nil {
+		return x.RecalledMemoryCount
+	}
+	return 0
+}
+
+type PlanEvent struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	StepCount     int32                  `protobuf:"varint,1,opt,name=step_count,json=stepCount,proto3" json:"step_count,omitempty"`
+	Steps         []string               `protobuf:"bytes,2,rep,name=steps,proto3" json:"steps,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *PlanEvent) Reset() {
+	*x = PlanEvent{}
+	mi := &file_synapse_v1_agent_proto_msgTypes[5]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *PlanEvent) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*PlanEvent) ProtoMessage() {}
+
+func (x *PlanEvent) ProtoReflect() protoreflect.Message {
+	mi := &file_synapse_v1_agent_proto_msgTypes[5]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use PlanEvent.ProtoReflect.Descriptor instead.
+func (*PlanEvent) Descriptor() ([]byte, []int) {
+	return file_synapse_v1_agent_proto_rawDescGZIP(), []int{5}
+}
+
+func (x *PlanEvent) GetStepCount() int32 {
+	if x != nil {
+		return x.StepCount
+	}
+	return 0
+}
+
+func (x *PlanEvent) GetSteps() []string {
+	if x != nil {
+		return x.Steps
+	}
+	return nil
+}
+
+type ToolSelectedEvent struct {
+	state            protoimpl.MessageState `protogen:"open.v1"`
+	StepIndex        int32                  `protobuf:"varint,1,opt,name=step_index,json=stepIndex,proto3" json:"step_index,omitempty"`
+	Objective        string                 `protobuf:"bytes,2,opt,name=objective,proto3" json:"objective,omitempty"`
+	ToolName         string                 `protobuf:"bytes,3,opt,name=tool_name,json=toolName,proto3" json:"tool_name,omitempty"`
+	ToolCallId       string                 `protobuf:"bytes,4,opt,name=tool_call_id,json=toolCallId,proto3" json:"tool_call_id,omitempty"`
+	RiskLevel        string                 `protobuf:"bytes,5,opt,name=risk_level,json=riskLevel,proto3" json:"risk_level,omitempty"`
+	InputPreview     string                 `protobuf:"bytes,6,opt,name=input_preview,json=inputPreview,proto3" json:"input_preview,omitempty"`
+	RequiresApproval bool                   `protobuf:"varint,7,opt,name=requires_approval,json=requiresApproval,proto3" json:"requires_approval,omitempty"`
+	ProviderName     string                 `protobuf:"bytes,8,opt,name=provider_name,json=providerName,proto3" json:"provider_name,omitempty"`
+	unknownFields    protoimpl.UnknownFields
+	sizeCache        protoimpl.SizeCache
+}
+
+func (x *ToolSelectedEvent) Reset() {
+	*x = ToolSelectedEvent{}
+	mi := &file_synapse_v1_agent_proto_msgTypes[6]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ToolSelectedEvent) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ToolSelectedEvent) ProtoMessage() {}
+
+func (x *ToolSelectedEvent) ProtoReflect() protoreflect.Message {
+	mi := &file_synapse_v1_agent_proto_msgTypes[6]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ToolSelectedEvent.ProtoReflect.Descriptor instead.
+func (*ToolSelectedEvent) Descriptor() ([]byte, []int) {
+	return file_synapse_v1_agent_proto_rawDescGZIP(), []int{6}
+}
+
+func (x *ToolSelectedEvent) GetStepIndex() int32 {
+	if x != nil {
+		return x.StepIndex
+	}
+	return 0
+}
+
+func (x *ToolSelectedEvent) GetObjective() string {
+	if x != nil {
+		return x.Objective
+	}
+	return ""
+}
+
+func (x *ToolSelectedEvent) GetToolName() string {
+	if x != nil {
+		return x.ToolName
+	}
+	return ""
+}
+
+func (x *ToolSelectedEvent) GetToolCallId() string {
+	if x != nil {
+		return x.ToolCallId
+	}
+	return ""
+}
+
+func (x *ToolSelectedEvent) GetRiskLevel() string {
+	if x != nil {
+		return x.RiskLevel
+	}
+	return ""
+}
+
+func (x *ToolSelectedEvent) GetInputPreview() string {
+	if x != nil {
+		return x.InputPreview
+	}
+	return ""
+}
+
+func (x *ToolSelectedEvent) GetRequiresApproval() bool {
+	if x != nil {
+		return x.RequiresApproval
+	}
+	return false
+}
+
+func (x *ToolSelectedEvent) GetProviderName() string {
+	if x != nil {
+		return x.ProviderName
+	}
+	return ""
+}
+
+type ToolStartedEvent struct {
+	state            protoimpl.MessageState `protogen:"open.v1"`
+	StepIndex        int32                  `protobuf:"varint,1,opt,name=step_index,json=stepIndex,proto3" json:"step_index,omitempty"`
+	Objective        string                 `protobuf:"bytes,2,opt,name=objective,proto3" json:"objective,omitempty"`
+	ToolName         string                 `protobuf:"bytes,3,opt,name=tool_name,json=toolName,proto3" json:"tool_name,omitempty"`
+	ToolCallId       string                 `protobuf:"bytes,4,opt,name=tool_call_id,json=toolCallId,proto3" json:"tool_call_id,omitempty"`
+	RiskLevel        string                 `protobuf:"bytes,5,opt,name=risk_level,json=riskLevel,proto3" json:"risk_level,omitempty"`
+	InputPreview     string                 `protobuf:"bytes,6,opt,name=input_preview,json=inputPreview,proto3" json:"input_preview,omitempty"`
+	RequiresApproval bool                   `protobuf:"varint,7,opt,name=requires_approval,json=requiresApproval,proto3" json:"requires_approval,omitempty"`
+	ProviderName     string                 `protobuf:"bytes,8,opt,name=provider_name,json=providerName,proto3" json:"provider_name,omitempty"`
+	unknownFields    protoimpl.UnknownFields
+	sizeCache        protoimpl.SizeCache
+}
+
+func (x *ToolStartedEvent) Reset() {
+	*x = ToolStartedEvent{}
+	mi := &file_synapse_v1_agent_proto_msgTypes[7]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ToolStartedEvent) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ToolStartedEvent) ProtoMessage() {}
+
+func (x *ToolStartedEvent) ProtoReflect() protoreflect.Message {
+	mi := &file_synapse_v1_agent_proto_msgTypes[7]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ToolStartedEvent.ProtoReflect.Descriptor instead.
+func (*ToolStartedEvent) Descriptor() ([]byte, []int) {
+	return file_synapse_v1_agent_proto_rawDescGZIP(), []int{7}
+}
+
+func (x *ToolStartedEvent) GetStepIndex() int32 {
+	if x != nil {
+		return x.StepIndex
+	}
+	return 0
+}
+
+func (x *ToolStartedEvent) GetObjective() string {
+	if x != nil {
+		return x.Objective
+	}
+	return ""
+}
+
+func (x *ToolStartedEvent) GetToolName() string {
+	if x != nil {
+		return x.ToolName
+	}
+	return ""
+}
+
+func (x *ToolStartedEvent) GetToolCallId() string {
+	if x != nil {
+		return x.ToolCallId
+	}
+	return ""
+}
+
+func (x *ToolStartedEvent) GetRiskLevel() string {
+	if x != nil {
+		return x.RiskLevel
+	}
+	return ""
+}
+
+func (x *ToolStartedEvent) GetInputPreview() string {
+	if x != nil {
+		return x.InputPreview
+	}
+	return ""
+}
+
+func (x *ToolStartedEvent) GetRequiresApproval() bool {
+	if x != nil {
+		return x.RequiresApproval
+	}
+	return false
+}
+
+func (x *ToolStartedEvent) GetProviderName() string {
+	if x != nil {
+		return x.ProviderName
+	}
+	return ""
+}
+
+type ToolFinishedEvent struct {
+	state            protoimpl.MessageState `protogen:"open.v1"`
+	StepIndex        int32                  `protobuf:"varint,1,opt,name=step_index,json=stepIndex,proto3" json:"step_index,omitempty"`
+	Objective        string                 `protobuf:"bytes,2,opt,name=objective,proto3" json:"objective,omitempty"`
+	ToolName         string                 `protobuf:"bytes,3,opt,name=tool_name,json=toolName,proto3" json:"tool_name,omitempty"`
+	ToolCallId       string                 `protobuf:"bytes,4,opt,name=tool_call_id,json=toolCallId,proto3" json:"tool_call_id,omitempty"`
+	RiskLevel        string                 `protobuf:"bytes,5,opt,name=risk_level,json=riskLevel,proto3" json:"risk_level,omitempty"`
+	InputPreview     string                 `protobuf:"bytes,6,opt,name=input_preview,json=inputPreview,proto3" json:"input_preview,omitempty"`
+	OutputPreview    string                 `protobuf:"bytes,7,opt,name=output_preview,json=outputPreview,proto3" json:"output_preview,omitempty"`
+	DurationMs       int64                  `protobuf:"varint,8,opt,name=duration_ms,json=durationMs,proto3" json:"duration_ms,omitempty"`
+	Ok               bool                   `protobuf:"varint,9,opt,name=ok,proto3" json:"ok,omitempty"`
+	ErrorCode        string                 `protobuf:"bytes,10,opt,name=error_code,json=errorCode,proto3" json:"error_code,omitempty"`
+	ErrorMessage     string                 `protobuf:"bytes,11,opt,name=error_message,json=errorMessage,proto3" json:"error_message,omitempty"`
+	RequiresApproval bool                   `protobuf:"varint,12,opt,name=requires_approval,json=requiresApproval,proto3" json:"requires_approval,omitempty"`
+	ProviderName     string                 `protobuf:"bytes,13,opt,name=provider_name,json=providerName,proto3" json:"provider_name,omitempty"`
+	unknownFields    protoimpl.UnknownFields
+	sizeCache        protoimpl.SizeCache
+}
+
+func (x *ToolFinishedEvent) Reset() {
+	*x = ToolFinishedEvent{}
+	mi := &file_synapse_v1_agent_proto_msgTypes[8]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ToolFinishedEvent) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ToolFinishedEvent) ProtoMessage() {}
+
+func (x *ToolFinishedEvent) ProtoReflect() protoreflect.Message {
+	mi := &file_synapse_v1_agent_proto_msgTypes[8]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ToolFinishedEvent.ProtoReflect.Descriptor instead.
+func (*ToolFinishedEvent) Descriptor() ([]byte, []int) {
+	return file_synapse_v1_agent_proto_rawDescGZIP(), []int{8}
+}
+
+func (x *ToolFinishedEvent) GetStepIndex() int32 {
+	if x != nil {
+		return x.StepIndex
+	}
+	return 0
+}
+
+func (x *ToolFinishedEvent) GetObjective() string {
+	if x != nil {
+		return x.Objective
+	}
+	return ""
+}
+
+func (x *ToolFinishedEvent) GetToolName() string {
+	if x != nil {
+		return x.ToolName
+	}
+	return ""
+}
+
+func (x *ToolFinishedEvent) GetToolCallId() string {
+	if x != nil {
+		return x.ToolCallId
+	}
+	return ""
+}
+
+func (x *ToolFinishedEvent) GetRiskLevel() string {
+	if x != nil {
+		return x.RiskLevel
+	}
+	return ""
+}
+
+func (x *ToolFinishedEvent) GetInputPreview() string {
+	if x != nil {
+		return x.InputPreview
+	}
+	return ""
+}
+
+func (x *ToolFinishedEvent) GetOutputPreview() string {
+	if x != nil {
+		return x.OutputPreview
+	}
+	return ""
+}
+
+func (x *ToolFinishedEvent) GetDurationMs() int64 {
+	if x != nil {
+		return x.DurationMs
+	}
+	return 0
+}
+
+func (x *ToolFinishedEvent) GetOk() bool {
+	if x != nil {
+		return x.Ok
+	}
+	return false
+}
+
+func (x *ToolFinishedEvent) GetErrorCode() string {
+	if x != nil {
+		return x.ErrorCode
+	}
+	return ""
+}
+
+func (x *ToolFinishedEvent) GetErrorMessage() string {
+	if x != nil {
+		return x.ErrorMessage
+	}
+	return ""
+}
+
+func (x *ToolFinishedEvent) GetRequiresApproval() bool {
+	if x != nil {
+		return x.RequiresApproval
+	}
+	return false
+}
+
+func (x *ToolFinishedEvent) GetProviderName() string {
+	if x != nil {
+		return x.ProviderName
+	}
+	return ""
+}
+
+type ToolFailedEvent struct {
+	state            protoimpl.MessageState `protogen:"open.v1"`
+	StepIndex        int32                  `protobuf:"varint,1,opt,name=step_index,json=stepIndex,proto3" json:"step_index,omitempty"`
+	Objective        string                 `protobuf:"bytes,2,opt,name=objective,proto3" json:"objective,omitempty"`
+	ToolName         string                 `protobuf:"bytes,3,opt,name=tool_name,json=toolName,proto3" json:"tool_name,omitempty"`
+	ToolCallId       string                 `protobuf:"bytes,4,opt,name=tool_call_id,json=toolCallId,proto3" json:"tool_call_id,omitempty"`
+	RiskLevel        string                 `protobuf:"bytes,5,opt,name=risk_level,json=riskLevel,proto3" json:"risk_level,omitempty"`
+	InputPreview     string                 `protobuf:"bytes,6,opt,name=input_preview,json=inputPreview,proto3" json:"input_preview,omitempty"`
+	OutputPreview    string                 `protobuf:"bytes,7,opt,name=output_preview,json=outputPreview,proto3" json:"output_preview,omitempty"`
+	DurationMs       int64                  `protobuf:"varint,8,opt,name=duration_ms,json=durationMs,proto3" json:"duration_ms,omitempty"`
+	Ok               bool                   `protobuf:"varint,9,opt,name=ok,proto3" json:"ok,omitempty"`
+	ErrorCode        string                 `protobuf:"bytes,10,opt,name=error_code,json=errorCode,proto3" json:"error_code,omitempty"`
+	ErrorMessage     string                 `protobuf:"bytes,11,opt,name=error_message,json=errorMessage,proto3" json:"error_message,omitempty"`
+	RequiresApproval bool                   `protobuf:"varint,12,opt,name=requires_approval,json=requiresApproval,proto3" json:"requires_approval,omitempty"`
+	ProviderName     string                 `protobuf:"bytes,13,opt,name=provider_name,json=providerName,proto3" json:"provider_name,omitempty"`
+	unknownFields    protoimpl.UnknownFields
+	sizeCache        protoimpl.SizeCache
+}
+
+func (x *ToolFailedEvent) Reset() {
+	*x = ToolFailedEvent{}
+	mi := &file_synapse_v1_agent_proto_msgTypes[9]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ToolFailedEvent) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ToolFailedEvent) ProtoMessage() {}
+
+func (x *ToolFailedEvent) ProtoReflect() protoreflect.Message {
+	mi := &file_synapse_v1_agent_proto_msgTypes[9]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ToolFailedEvent.ProtoReflect.Descriptor instead.
+func (*ToolFailedEvent) Descriptor() ([]byte, []int) {
+	return file_synapse_v1_agent_proto_rawDescGZIP(), []int{9}
+}
+
+func (x *ToolFailedEvent) GetStepIndex() int32 {
+	if x != nil {
+		return x.StepIndex
+	}
+	return 0
+}
+
+func (x *ToolFailedEvent) GetObjective() string {
+	if x != nil {
+		return x.Objective
+	}
+	return ""
+}
+
+func (x *ToolFailedEvent) GetToolName() string {
+	if x != nil {
+		return x.ToolName
+	}
+	return ""
+}
+
+func (x *ToolFailedEvent) GetToolCallId() string {
+	if x != nil {
+		return x.ToolCallId
+	}
+	return ""
+}
+
+func (x *ToolFailedEvent) GetRiskLevel() string {
+	if x != nil {
+		return x.RiskLevel
+	}
+	return ""
+}
+
+func (x *ToolFailedEvent) GetInputPreview() string {
+	if x != nil {
+		return x.InputPreview
+	}
+	return ""
+}
+
+func (x *ToolFailedEvent) GetOutputPreview() string {
+	if x != nil {
+		return x.OutputPreview
+	}
+	return ""
+}
+
+func (x *ToolFailedEvent) GetDurationMs() int64 {
+	if x != nil {
+		return x.DurationMs
+	}
+	return 0
+}
+
+func (x *ToolFailedEvent) GetOk() bool {
+	if x != nil {
+		return x.Ok
+	}
+	return false
+}
+
+func (x *ToolFailedEvent) GetErrorCode() string {
+	if x != nil {
+		return x.ErrorCode
+	}
+	return ""
+}
+
+func (x *ToolFailedEvent) GetErrorMessage() string {
+	if x != nil {
+		return x.ErrorMessage
+	}
+	return ""
+}
+
+func (x *ToolFailedEvent) GetRequiresApproval() bool {
+	if x != nil {
+		return x.RequiresApproval
+	}
+	return false
+}
+
+func (x *ToolFailedEvent) GetProviderName() string {
+	if x != nil {
+		return x.ProviderName
+	}
+	return ""
+}
+
+type ToolSkippedEvent struct {
+	state            protoimpl.MessageState `protogen:"open.v1"`
+	StepIndex        int32                  `protobuf:"varint,1,opt,name=step_index,json=stepIndex,proto3" json:"step_index,omitempty"`
+	Objective        string                 `protobuf:"bytes,2,opt,name=objective,proto3" json:"objective,omitempty"`
+	ToolName         string                 `protobuf:"bytes,3,opt,name=tool_name,json=toolName,proto3" json:"tool_name,omitempty"`
+	ToolCallId       string                 `protobuf:"bytes,4,opt,name=tool_call_id,json=toolCallId,proto3" json:"tool_call_id,omitempty"`
+	RiskLevel        string                 `protobuf:"bytes,5,opt,name=risk_level,json=riskLevel,proto3" json:"risk_level,omitempty"`
+	InputPreview     string                 `protobuf:"bytes,6,opt,name=input_preview,json=inputPreview,proto3" json:"input_preview,omitempty"`
+	Reason           string                 `protobuf:"bytes,7,opt,name=reason,proto3" json:"reason,omitempty"`
+	RequiresApproval bool                   `protobuf:"varint,8,opt,name=requires_approval,json=requiresApproval,proto3" json:"requires_approval,omitempty"`
+	ProviderName     string                 `protobuf:"bytes,9,opt,name=provider_name,json=providerName,proto3" json:"provider_name,omitempty"`
+	unknownFields    protoimpl.UnknownFields
+	sizeCache        protoimpl.SizeCache
+}
+
+func (x *ToolSkippedEvent) Reset() {
+	*x = ToolSkippedEvent{}
+	mi := &file_synapse_v1_agent_proto_msgTypes[10]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ToolSkippedEvent) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ToolSkippedEvent) ProtoMessage() {}
+
+func (x *ToolSkippedEvent) ProtoReflect() protoreflect.Message {
+	mi := &file_synapse_v1_agent_proto_msgTypes[10]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ToolSkippedEvent.ProtoReflect.Descriptor instead.
+func (*ToolSkippedEvent) Descriptor() ([]byte, []int) {
+	return file_synapse_v1_agent_proto_rawDescGZIP(), []int{10}
+}
+
+func (x *ToolSkippedEvent) GetStepIndex() int32 {
+	if x != nil {
+		return x.StepIndex
+	}
+	return 0
+}
+
+func (x *ToolSkippedEvent) GetObjective() string {
+	if x != nil {
+		return x.Objective
+	}
+	return ""
+}
+
+func (x *ToolSkippedEvent) GetToolName() string {
+	if x != nil {
+		return x.ToolName
+	}
+	return ""
+}
+
+func (x *ToolSkippedEvent) GetToolCallId() string {
+	if x != nil {
+		return x.ToolCallId
+	}
+	return ""
+}
+
+func (x *ToolSkippedEvent) GetRiskLevel() string {
+	if x != nil {
+		return x.RiskLevel
+	}
+	return ""
+}
+
+func (x *ToolSkippedEvent) GetInputPreview() string {
+	if x != nil {
+		return x.InputPreview
+	}
+	return ""
+}
+
+func (x *ToolSkippedEvent) GetReason() string {
+	if x != nil {
+		return x.Reason
+	}
+	return ""
+}
+
+func (x *ToolSkippedEvent) GetRequiresApproval() bool {
+	if x != nil {
+		return x.RequiresApproval
+	}
+	return false
+}
+
+func (x *ToolSkippedEvent) GetProviderName() string {
+	if x != nil {
+		return x.ProviderName
+	}
+	return ""
+}
+
+type ApprovedToolCallEvent struct {
+	state           protoimpl.MessageState `protogen:"open.v1"`
+	ToolName        string                 `protobuf:"bytes,1,opt,name=tool_name,json=toolName,proto3" json:"tool_name,omitempty"`
+	ToolInput       string                 `protobuf:"bytes,2,opt,name=tool_input,json=toolInput,proto3" json:"tool_input,omitempty"`
+	RiskLevel       string                 `protobuf:"bytes,3,opt,name=risk_level,json=riskLevel,proto3" json:"risk_level,omitempty"`
+	Reason          string                 `protobuf:"bytes,4,opt,name=reason,proto3" json:"reason,omitempty"`
+	ResumeStepIndex int32                  `protobuf:"varint,5,opt,name=resume_step_index,json=resumeStepIndex,proto3" json:"resume_step_index,omitempty"`
+	unknownFields   protoimpl.UnknownFields
+	sizeCache       protoimpl.SizeCache
+}
+
+func (x *ApprovedToolCallEvent) Reset() {
+	*x = ApprovedToolCallEvent{}
+	mi := &file_synapse_v1_agent_proto_msgTypes[11]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ApprovedToolCallEvent) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ApprovedToolCallEvent) ProtoMessage() {}
+
+func (x *ApprovedToolCallEvent) ProtoReflect() protoreflect.Message {
+	mi := &file_synapse_v1_agent_proto_msgTypes[11]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ApprovedToolCallEvent.ProtoReflect.Descriptor instead.
+func (*ApprovedToolCallEvent) Descriptor() ([]byte, []int) {
+	return file_synapse_v1_agent_proto_rawDescGZIP(), []int{11}
+}
+
+func (x *ApprovedToolCallEvent) GetToolName() string {
+	if x != nil {
+		return x.ToolName
+	}
+	return ""
+}
+
+func (x *ApprovedToolCallEvent) GetToolInput() string {
+	if x != nil {
+		return x.ToolInput
+	}
+	return ""
+}
+
+func (x *ApprovedToolCallEvent) GetRiskLevel() string {
+	if x != nil {
+		return x.RiskLevel
+	}
+	return ""
+}
+
+func (x *ApprovedToolCallEvent) GetReason() string {
+	if x != nil {
+		return x.Reason
+	}
+	return ""
+}
+
+func (x *ApprovedToolCallEvent) GetResumeStepIndex() int32 {
+	if x != nil {
+		return x.ResumeStepIndex
+	}
+	return 0
+}
+
+type ApprovalRequiredEvent struct {
+	state            protoimpl.MessageState `protogen:"open.v1"`
+	StepIndex        int32                  `protobuf:"varint,1,opt,name=step_index,json=stepIndex,proto3" json:"step_index,omitempty"`
+	ResumeStepIndex  int32                  `protobuf:"varint,2,opt,name=resume_step_index,json=resumeStepIndex,proto3" json:"resume_step_index,omitempty"`
+	ToolName         string                 `protobuf:"bytes,3,opt,name=tool_name,json=toolName,proto3" json:"tool_name,omitempty"`
+	ToolInput        string                 `protobuf:"bytes,4,opt,name=tool_input,json=toolInput,proto3" json:"tool_input,omitempty"`
+	RiskLevel        string                 `protobuf:"bytes,5,opt,name=risk_level,json=riskLevel,proto3" json:"risk_level,omitempty"`
+	Reason           string                 `protobuf:"bytes,6,opt,name=reason,proto3" json:"reason,omitempty"`
+	ToolCallId       string                 `protobuf:"bytes,7,opt,name=tool_call_id,json=toolCallId,proto3" json:"tool_call_id,omitempty"`
+	ApprovalReason   string                 `protobuf:"bytes,8,opt,name=approval_reason,json=approvalReason,proto3" json:"approval_reason,omitempty"`
+	ApprovedToolCall *ApprovedToolCallEvent `protobuf:"bytes,9,opt,name=approved_tool_call,json=approvedToolCall,proto3" json:"approved_tool_call,omitempty"`
+	Objective        string                 `protobuf:"bytes,10,opt,name=objective,proto3" json:"objective,omitempty"`
+	unknownFields    protoimpl.UnknownFields
+	sizeCache        protoimpl.SizeCache
+}
+
+func (x *ApprovalRequiredEvent) Reset() {
+	*x = ApprovalRequiredEvent{}
+	mi := &file_synapse_v1_agent_proto_msgTypes[12]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ApprovalRequiredEvent) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ApprovalRequiredEvent) ProtoMessage() {}
+
+func (x *ApprovalRequiredEvent) ProtoReflect() protoreflect.Message {
+	mi := &file_synapse_v1_agent_proto_msgTypes[12]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ApprovalRequiredEvent.ProtoReflect.Descriptor instead.
+func (*ApprovalRequiredEvent) Descriptor() ([]byte, []int) {
+	return file_synapse_v1_agent_proto_rawDescGZIP(), []int{12}
+}
+
+func (x *ApprovalRequiredEvent) GetStepIndex() int32 {
+	if x != nil {
+		return x.StepIndex
+	}
+	return 0
+}
+
+func (x *ApprovalRequiredEvent) GetResumeStepIndex() int32 {
+	if x != nil {
+		return x.ResumeStepIndex
+	}
+	return 0
+}
+
+func (x *ApprovalRequiredEvent) GetToolName() string {
+	if x != nil {
+		return x.ToolName
+	}
+	return ""
+}
+
+func (x *ApprovalRequiredEvent) GetToolInput() string {
+	if x != nil {
+		return x.ToolInput
+	}
+	return ""
+}
+
+func (x *ApprovalRequiredEvent) GetRiskLevel() string {
+	if x != nil {
+		return x.RiskLevel
+	}
+	return ""
+}
+
+func (x *ApprovalRequiredEvent) GetReason() string {
+	if x != nil {
+		return x.Reason
+	}
+	return ""
+}
+
+func (x *ApprovalRequiredEvent) GetToolCallId() string {
+	if x != nil {
+		return x.ToolCallId
+	}
+	return ""
+}
+
+func (x *ApprovalRequiredEvent) GetApprovalReason() string {
+	if x != nil {
+		return x.ApprovalReason
+	}
+	return ""
+}
+
+func (x *ApprovalRequiredEvent) GetApprovedToolCall() *ApprovedToolCallEvent {
+	if x != nil {
+		return x.ApprovedToolCall
+	}
+	return nil
+}
+
+func (x *ApprovalRequiredEvent) GetObjective() string {
+	if x != nil {
+		return x.Objective
+	}
+	return ""
+}
+
+type MemoryEventHit struct {
+	state          protoimpl.MessageState `protogen:"open.v1"`
+	MemoryId       string                 `protobuf:"bytes,1,opt,name=memory_id,json=memoryId,proto3" json:"memory_id,omitempty"`
+	Summary        string                 `protobuf:"bytes,2,opt,name=summary,proto3" json:"summary,omitempty"`
+	ContentPreview string                 `protobuf:"bytes,3,opt,name=content_preview,json=contentPreview,proto3" json:"content_preview,omitempty"`
+	SourceTaskId   string                 `protobuf:"bytes,4,opt,name=source_task_id,json=sourceTaskId,proto3" json:"source_task_id,omitempty"`
+	Importance     float64                `protobuf:"fixed64,5,opt,name=importance,proto3" json:"importance,omitempty"`
+	Score          float64                `protobuf:"fixed64,6,opt,name=score,proto3" json:"score,omitempty"`
+	MatchedTerms   []string               `protobuf:"bytes,7,rep,name=matched_terms,json=matchedTerms,proto3" json:"matched_terms,omitempty"`
+	CreatedAt      int64                  `protobuf:"varint,8,opt,name=created_at,json=createdAt,proto3" json:"created_at,omitempty"`
+	unknownFields  protoimpl.UnknownFields
+	sizeCache      protoimpl.SizeCache
+}
+
+func (x *MemoryEventHit) Reset() {
+	*x = MemoryEventHit{}
+	mi := &file_synapse_v1_agent_proto_msgTypes[13]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *MemoryEventHit) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*MemoryEventHit) ProtoMessage() {}
+
+func (x *MemoryEventHit) ProtoReflect() protoreflect.Message {
+	mi := &file_synapse_v1_agent_proto_msgTypes[13]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use MemoryEventHit.ProtoReflect.Descriptor instead.
+func (*MemoryEventHit) Descriptor() ([]byte, []int) {
+	return file_synapse_v1_agent_proto_rawDescGZIP(), []int{13}
+}
+
+func (x *MemoryEventHit) GetMemoryId() string {
+	if x != nil {
+		return x.MemoryId
+	}
+	return ""
+}
+
+func (x *MemoryEventHit) GetSummary() string {
+	if x != nil {
+		return x.Summary
+	}
+	return ""
+}
+
+func (x *MemoryEventHit) GetContentPreview() string {
+	if x != nil {
+		return x.ContentPreview
+	}
+	return ""
+}
+
+func (x *MemoryEventHit) GetSourceTaskId() string {
+	if x != nil {
+		return x.SourceTaskId
+	}
+	return ""
+}
+
+func (x *MemoryEventHit) GetImportance() float64 {
+	if x != nil {
+		return x.Importance
+	}
+	return 0
+}
+
+func (x *MemoryEventHit) GetScore() float64 {
+	if x != nil {
+		return x.Score
+	}
+	return 0
+}
+
+func (x *MemoryEventHit) GetMatchedTerms() []string {
+	if x != nil {
+		return x.MatchedTerms
+	}
+	return nil
+}
+
+func (x *MemoryEventHit) GetCreatedAt() int64 {
+	if x != nil {
+		return x.CreatedAt
+	}
+	return 0
+}
+
+type MemoryRecallEvent struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Query         string                 `protobuf:"bytes,1,opt,name=query,proto3" json:"query,omitempty"`
+	HitCount      int32                  `protobuf:"varint,2,opt,name=hit_count,json=hitCount,proto3" json:"hit_count,omitempty"`
+	Hits          []*MemoryEventHit      `protobuf:"bytes,3,rep,name=hits,proto3" json:"hits,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *MemoryRecallEvent) Reset() {
+	*x = MemoryRecallEvent{}
+	mi := &file_synapse_v1_agent_proto_msgTypes[14]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *MemoryRecallEvent) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*MemoryRecallEvent) ProtoMessage() {}
+
+func (x *MemoryRecallEvent) ProtoReflect() protoreflect.Message {
+	mi := &file_synapse_v1_agent_proto_msgTypes[14]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use MemoryRecallEvent.ProtoReflect.Descriptor instead.
+func (*MemoryRecallEvent) Descriptor() ([]byte, []int) {
+	return file_synapse_v1_agent_proto_rawDescGZIP(), []int{14}
+}
+
+func (x *MemoryRecallEvent) GetQuery() string {
+	if x != nil {
+		return x.Query
+	}
+	return ""
+}
+
+func (x *MemoryRecallEvent) GetHitCount() int32 {
+	if x != nil {
+		return x.HitCount
+	}
+	return 0
+}
+
+func (x *MemoryRecallEvent) GetHits() []*MemoryEventHit {
+	if x != nil {
+		return x.Hits
+	}
+	return nil
+}
+
+type MemoryWriteEvent struct {
+	state          protoimpl.MessageState `protogen:"open.v1"`
+	MemoryId       string                 `protobuf:"bytes,1,opt,name=memory_id,json=memoryId,proto3" json:"memory_id,omitempty"`
+	UserId         string                 `protobuf:"bytes,2,opt,name=user_id,json=userId,proto3" json:"user_id,omitempty"`
+	Summary        string                 `protobuf:"bytes,3,opt,name=summary,proto3" json:"summary,omitempty"`
+	ContentPreview string                 `protobuf:"bytes,4,opt,name=content_preview,json=contentPreview,proto3" json:"content_preview,omitempty"`
+	SourceTaskId   string                 `protobuf:"bytes,5,opt,name=source_task_id,json=sourceTaskId,proto3" json:"source_task_id,omitempty"`
+	Importance     float64                `protobuf:"fixed64,6,opt,name=importance,proto3" json:"importance,omitempty"`
+	CreatedAt      int64                  `protobuf:"varint,7,opt,name=created_at,json=createdAt,proto3" json:"created_at,omitempty"`
+	unknownFields  protoimpl.UnknownFields
+	sizeCache      protoimpl.SizeCache
+}
+
+func (x *MemoryWriteEvent) Reset() {
+	*x = MemoryWriteEvent{}
+	mi := &file_synapse_v1_agent_proto_msgTypes[15]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *MemoryWriteEvent) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*MemoryWriteEvent) ProtoMessage() {}
+
+func (x *MemoryWriteEvent) ProtoReflect() protoreflect.Message {
+	mi := &file_synapse_v1_agent_proto_msgTypes[15]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use MemoryWriteEvent.ProtoReflect.Descriptor instead.
+func (*MemoryWriteEvent) Descriptor() ([]byte, []int) {
+	return file_synapse_v1_agent_proto_rawDescGZIP(), []int{15}
+}
+
+func (x *MemoryWriteEvent) GetMemoryId() string {
+	if x != nil {
+		return x.MemoryId
+	}
+	return ""
+}
+
+func (x *MemoryWriteEvent) GetUserId() string {
+	if x != nil {
+		return x.UserId
+	}
+	return ""
+}
+
+func (x *MemoryWriteEvent) GetSummary() string {
+	if x != nil {
+		return x.Summary
+	}
+	return ""
+}
+
+func (x *MemoryWriteEvent) GetContentPreview() string {
+	if x != nil {
+		return x.ContentPreview
+	}
+	return ""
+}
+
+func (x *MemoryWriteEvent) GetSourceTaskId() string {
+	if x != nil {
+		return x.SourceTaskId
+	}
+	return ""
+}
+
+func (x *MemoryWriteEvent) GetImportance() float64 {
+	if x != nil {
+		return x.Importance
+	}
+	return 0
+}
+
+func (x *MemoryWriteEvent) GetCreatedAt() int64 {
+	if x != nil {
+		return x.CreatedAt
+	}
+	return 0
+}
+
+type EvaluationEvent struct {
+	state               protoimpl.MessageState `protogen:"open.v1"`
+	EstimatedSuccess    float64                `protobuf:"fixed64,1,opt,name=estimated_success,json=estimatedSuccess,proto3" json:"estimated_success,omitempty"`
+	ObjectiveCompletion float64                `protobuf:"fixed64,2,opt,name=objective_completion,json=objectiveCompletion,proto3" json:"objective_completion,omitempty"`
+	ToolSuccessRate     float64                `protobuf:"fixed64,3,opt,name=tool_success_rate,json=toolSuccessRate,proto3" json:"tool_success_rate,omitempty"`
+	BlockedActions      int32                  `protobuf:"varint,4,opt,name=blocked_actions,json=blockedActions,proto3" json:"blocked_actions,omitempty"`
+	DurationMs          int64                  `protobuf:"varint,5,opt,name=duration_ms,json=durationMs,proto3" json:"duration_ms,omitempty"`
+	unknownFields       protoimpl.UnknownFields
+	sizeCache           protoimpl.SizeCache
+}
+
+func (x *EvaluationEvent) Reset() {
+	*x = EvaluationEvent{}
+	mi := &file_synapse_v1_agent_proto_msgTypes[16]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *EvaluationEvent) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*EvaluationEvent) ProtoMessage() {}
+
+func (x *EvaluationEvent) ProtoReflect() protoreflect.Message {
+	mi := &file_synapse_v1_agent_proto_msgTypes[16]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use EvaluationEvent.ProtoReflect.Descriptor instead.
+func (*EvaluationEvent) Descriptor() ([]byte, []int) {
+	return file_synapse_v1_agent_proto_rawDescGZIP(), []int{16}
+}
+
+func (x *EvaluationEvent) GetEstimatedSuccess() float64 {
+	if x != nil {
+		return x.EstimatedSuccess
+	}
+	return 0
+}
+
+func (x *EvaluationEvent) GetObjectiveCompletion() float64 {
+	if x != nil {
+		return x.ObjectiveCompletion
+	}
+	return 0
+}
+
+func (x *EvaluationEvent) GetToolSuccessRate() float64 {
+	if x != nil {
+		return x.ToolSuccessRate
+	}
+	return 0
+}
+
+func (x *EvaluationEvent) GetBlockedActions() int32 {
+	if x != nil {
+		return x.BlockedActions
+	}
+	return 0
+}
+
+func (x *EvaluationEvent) GetDurationMs() int64 {
+	if x != nil {
+		return x.DurationMs
+	}
+	return 0
+}
+
+type ReplanEvent struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	StepIndex     int32                  `protobuf:"varint,1,opt,name=step_index,json=stepIndex,proto3" json:"step_index,omitempty"`
+	Reason        string                 `protobuf:"bytes,2,opt,name=reason,proto3" json:"reason,omitempty"`
+	FromTool      string                 `protobuf:"bytes,3,opt,name=from_tool,json=fromTool,proto3" json:"from_tool,omitempty"`
+	ToTool        string                 `protobuf:"bytes,4,opt,name=to_tool,json=toTool,proto3" json:"to_tool,omitempty"`
+	ToToolInput   string                 `protobuf:"bytes,5,opt,name=to_tool_input,json=toToolInput,proto3" json:"to_tool_input,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ReplanEvent) Reset() {
+	*x = ReplanEvent{}
+	mi := &file_synapse_v1_agent_proto_msgTypes[17]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ReplanEvent) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ReplanEvent) ProtoMessage() {}
+
+func (x *ReplanEvent) ProtoReflect() protoreflect.Message {
+	mi := &file_synapse_v1_agent_proto_msgTypes[17]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ReplanEvent.ProtoReflect.Descriptor instead.
+func (*ReplanEvent) Descriptor() ([]byte, []int) {
+	return file_synapse_v1_agent_proto_rawDescGZIP(), []int{17}
+}
+
+func (x *ReplanEvent) GetStepIndex() int32 {
+	if x != nil {
+		return x.StepIndex
+	}
+	return 0
+}
+
+func (x *ReplanEvent) GetReason() string {
+	if x != nil {
+		return x.Reason
+	}
+	return ""
+}
+
+func (x *ReplanEvent) GetFromTool() string {
+	if x != nil {
+		return x.FromTool
+	}
+	return ""
+}
+
+func (x *ReplanEvent) GetToTool() string {
+	if x != nil {
+		return x.ToTool
+	}
+	return ""
+}
+
+func (x *ReplanEvent) GetToToolInput() string {
+	if x != nil {
+		return x.ToToolInput
+	}
+	return ""
+}
+
+type SynthesisModeEvent struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Mode          string                 `protobuf:"bytes,1,opt,name=mode,proto3" json:"mode,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *SynthesisModeEvent) Reset() {
+	*x = SynthesisModeEvent{}
+	mi := &file_synapse_v1_agent_proto_msgTypes[18]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *SynthesisModeEvent) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*SynthesisModeEvent) ProtoMessage() {}
+
+func (x *SynthesisModeEvent) ProtoReflect() protoreflect.Message {
+	mi := &file_synapse_v1_agent_proto_msgTypes[18]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use SynthesisModeEvent.ProtoReflect.Descriptor instead.
+func (*SynthesisModeEvent) Descriptor() ([]byte, []int) {
+	return file_synapse_v1_agent_proto_rawDescGZIP(), []int{18}
+}
+
+func (x *SynthesisModeEvent) GetMode() string {
+	if x != nil {
+		return x.Mode
+	}
+	return ""
+}
+
 // 长期记忆记录，和 AI Engine 内部 MemoryStore 结构保持同名字段。
 type MemoryRecord struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
@@ -332,7 +1902,7 @@ type MemoryRecord struct {
 
 func (x *MemoryRecord) Reset() {
 	*x = MemoryRecord{}
-	mi := &file_synapse_v1_agent_proto_msgTypes[4]
+	mi := &file_synapse_v1_agent_proto_msgTypes[19]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -344,7 +1914,7 @@ func (x *MemoryRecord) String() string {
 func (*MemoryRecord) ProtoMessage() {}
 
 func (x *MemoryRecord) ProtoReflect() protoreflect.Message {
-	mi := &file_synapse_v1_agent_proto_msgTypes[4]
+	mi := &file_synapse_v1_agent_proto_msgTypes[19]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -357,7 +1927,7 @@ func (x *MemoryRecord) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use MemoryRecord.ProtoReflect.Descriptor instead.
 func (*MemoryRecord) Descriptor() ([]byte, []int) {
-	return file_synapse_v1_agent_proto_rawDescGZIP(), []int{4}
+	return file_synapse_v1_agent_proto_rawDescGZIP(), []int{19}
 }
 
 func (x *MemoryRecord) GetMemoryId() string {
@@ -421,7 +1991,7 @@ type MemoryRecallHit struct {
 
 func (x *MemoryRecallHit) Reset() {
 	*x = MemoryRecallHit{}
-	mi := &file_synapse_v1_agent_proto_msgTypes[5]
+	mi := &file_synapse_v1_agent_proto_msgTypes[20]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -433,7 +2003,7 @@ func (x *MemoryRecallHit) String() string {
 func (*MemoryRecallHit) ProtoMessage() {}
 
 func (x *MemoryRecallHit) ProtoReflect() protoreflect.Message {
-	mi := &file_synapse_v1_agent_proto_msgTypes[5]
+	mi := &file_synapse_v1_agent_proto_msgTypes[20]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -446,7 +2016,7 @@ func (x *MemoryRecallHit) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use MemoryRecallHit.ProtoReflect.Descriptor instead.
 func (*MemoryRecallHit) Descriptor() ([]byte, []int) {
-	return file_synapse_v1_agent_proto_rawDescGZIP(), []int{5}
+	return file_synapse_v1_agent_proto_rawDescGZIP(), []int{20}
 }
 
 func (x *MemoryRecallHit) GetRecord() *MemoryRecord {
@@ -483,7 +2053,7 @@ type MemoryWriteRequest struct {
 
 func (x *MemoryWriteRequest) Reset() {
 	*x = MemoryWriteRequest{}
-	mi := &file_synapse_v1_agent_proto_msgTypes[6]
+	mi := &file_synapse_v1_agent_proto_msgTypes[21]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -495,7 +2065,7 @@ func (x *MemoryWriteRequest) String() string {
 func (*MemoryWriteRequest) ProtoMessage() {}
 
 func (x *MemoryWriteRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_synapse_v1_agent_proto_msgTypes[6]
+	mi := &file_synapse_v1_agent_proto_msgTypes[21]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -508,7 +2078,7 @@ func (x *MemoryWriteRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use MemoryWriteRequest.ProtoReflect.Descriptor instead.
 func (*MemoryWriteRequest) Descriptor() ([]byte, []int) {
-	return file_synapse_v1_agent_proto_rawDescGZIP(), []int{6}
+	return file_synapse_v1_agent_proto_rawDescGZIP(), []int{21}
 }
 
 func (x *MemoryWriteRequest) GetUserId() string {
@@ -555,7 +2125,7 @@ type MemoryWriteResponse struct {
 
 func (x *MemoryWriteResponse) Reset() {
 	*x = MemoryWriteResponse{}
-	mi := &file_synapse_v1_agent_proto_msgTypes[7]
+	mi := &file_synapse_v1_agent_proto_msgTypes[22]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -567,7 +2137,7 @@ func (x *MemoryWriteResponse) String() string {
 func (*MemoryWriteResponse) ProtoMessage() {}
 
 func (x *MemoryWriteResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_synapse_v1_agent_proto_msgTypes[7]
+	mi := &file_synapse_v1_agent_proto_msgTypes[22]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -580,7 +2150,7 @@ func (x *MemoryWriteResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use MemoryWriteResponse.ProtoReflect.Descriptor instead.
 func (*MemoryWriteResponse) Descriptor() ([]byte, []int) {
-	return file_synapse_v1_agent_proto_rawDescGZIP(), []int{7}
+	return file_synapse_v1_agent_proto_rawDescGZIP(), []int{22}
 }
 
 func (x *MemoryWriteResponse) GetRecord() *MemoryRecord {
@@ -601,7 +2171,7 @@ type MemoryRecallRequest struct {
 
 func (x *MemoryRecallRequest) Reset() {
 	*x = MemoryRecallRequest{}
-	mi := &file_synapse_v1_agent_proto_msgTypes[8]
+	mi := &file_synapse_v1_agent_proto_msgTypes[23]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -613,7 +2183,7 @@ func (x *MemoryRecallRequest) String() string {
 func (*MemoryRecallRequest) ProtoMessage() {}
 
 func (x *MemoryRecallRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_synapse_v1_agent_proto_msgTypes[8]
+	mi := &file_synapse_v1_agent_proto_msgTypes[23]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -626,7 +2196,7 @@ func (x *MemoryRecallRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use MemoryRecallRequest.ProtoReflect.Descriptor instead.
 func (*MemoryRecallRequest) Descriptor() ([]byte, []int) {
-	return file_synapse_v1_agent_proto_rawDescGZIP(), []int{8}
+	return file_synapse_v1_agent_proto_rawDescGZIP(), []int{23}
 }
 
 func (x *MemoryRecallRequest) GetUserId() string {
@@ -659,7 +2229,7 @@ type MemoryRecallResponse struct {
 
 func (x *MemoryRecallResponse) Reset() {
 	*x = MemoryRecallResponse{}
-	mi := &file_synapse_v1_agent_proto_msgTypes[9]
+	mi := &file_synapse_v1_agent_proto_msgTypes[24]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -671,7 +2241,7 @@ func (x *MemoryRecallResponse) String() string {
 func (*MemoryRecallResponse) ProtoMessage() {}
 
 func (x *MemoryRecallResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_synapse_v1_agent_proto_msgTypes[9]
+	mi := &file_synapse_v1_agent_proto_msgTypes[24]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -684,7 +2254,7 @@ func (x *MemoryRecallResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use MemoryRecallResponse.ProtoReflect.Descriptor instead.
 func (*MemoryRecallResponse) Descriptor() ([]byte, []int) {
-	return file_synapse_v1_agent_proto_rawDescGZIP(), []int{9}
+	return file_synapse_v1_agent_proto_rawDescGZIP(), []int{24}
 }
 
 func (x *MemoryRecallResponse) GetHits() []*MemoryRecallHit {
@@ -704,7 +2274,7 @@ type MemoryDeleteRequest struct {
 
 func (x *MemoryDeleteRequest) Reset() {
 	*x = MemoryDeleteRequest{}
-	mi := &file_synapse_v1_agent_proto_msgTypes[10]
+	mi := &file_synapse_v1_agent_proto_msgTypes[25]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -716,7 +2286,7 @@ func (x *MemoryDeleteRequest) String() string {
 func (*MemoryDeleteRequest) ProtoMessage() {}
 
 func (x *MemoryDeleteRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_synapse_v1_agent_proto_msgTypes[10]
+	mi := &file_synapse_v1_agent_proto_msgTypes[25]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -729,7 +2299,7 @@ func (x *MemoryDeleteRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use MemoryDeleteRequest.ProtoReflect.Descriptor instead.
 func (*MemoryDeleteRequest) Descriptor() ([]byte, []int) {
-	return file_synapse_v1_agent_proto_rawDescGZIP(), []int{10}
+	return file_synapse_v1_agent_proto_rawDescGZIP(), []int{25}
 }
 
 func (x *MemoryDeleteRequest) GetUserId() string {
@@ -755,7 +2325,7 @@ type MemoryDeleteResponse struct {
 
 func (x *MemoryDeleteResponse) Reset() {
 	*x = MemoryDeleteResponse{}
-	mi := &file_synapse_v1_agent_proto_msgTypes[11]
+	mi := &file_synapse_v1_agent_proto_msgTypes[26]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -767,7 +2337,7 @@ func (x *MemoryDeleteResponse) String() string {
 func (*MemoryDeleteResponse) ProtoMessage() {}
 
 func (x *MemoryDeleteResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_synapse_v1_agent_proto_msgTypes[11]
+	mi := &file_synapse_v1_agent_proto_msgTypes[26]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -780,7 +2350,7 @@ func (x *MemoryDeleteResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use MemoryDeleteResponse.ProtoReflect.Descriptor instead.
 func (*MemoryDeleteResponse) Descriptor() ([]byte, []int) {
-	return file_synapse_v1_agent_proto_rawDescGZIP(), []int{11}
+	return file_synapse_v1_agent_proto_rawDescGZIP(), []int{26}
 }
 
 func (x *MemoryDeleteResponse) GetDeleted() bool {
@@ -800,7 +2370,7 @@ type MemoryListRequest struct {
 
 func (x *MemoryListRequest) Reset() {
 	*x = MemoryListRequest{}
-	mi := &file_synapse_v1_agent_proto_msgTypes[12]
+	mi := &file_synapse_v1_agent_proto_msgTypes[27]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -812,7 +2382,7 @@ func (x *MemoryListRequest) String() string {
 func (*MemoryListRequest) ProtoMessage() {}
 
 func (x *MemoryListRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_synapse_v1_agent_proto_msgTypes[12]
+	mi := &file_synapse_v1_agent_proto_msgTypes[27]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -825,7 +2395,7 @@ func (x *MemoryListRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use MemoryListRequest.ProtoReflect.Descriptor instead.
 func (*MemoryListRequest) Descriptor() ([]byte, []int) {
-	return file_synapse_v1_agent_proto_rawDescGZIP(), []int{12}
+	return file_synapse_v1_agent_proto_rawDescGZIP(), []int{27}
 }
 
 func (x *MemoryListRequest) GetUserId() string {
@@ -851,7 +2421,7 @@ type MemoryListResponse struct {
 
 func (x *MemoryListResponse) Reset() {
 	*x = MemoryListResponse{}
-	mi := &file_synapse_v1_agent_proto_msgTypes[13]
+	mi := &file_synapse_v1_agent_proto_msgTypes[28]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -863,7 +2433,7 @@ func (x *MemoryListResponse) String() string {
 func (*MemoryListResponse) ProtoMessage() {}
 
 func (x *MemoryListResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_synapse_v1_agent_proto_msgTypes[13]
+	mi := &file_synapse_v1_agent_proto_msgTypes[28]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -876,7 +2446,7 @@ func (x *MemoryListResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use MemoryListResponse.ProtoReflect.Descriptor instead.
 func (*MemoryListResponse) Descriptor() ([]byte, []int) {
-	return file_synapse_v1_agent_proto_rawDescGZIP(), []int{13}
+	return file_synapse_v1_agent_proto_rawDescGZIP(), []int{28}
 }
 
 func (x *MemoryListResponse) GetItems() []*MemoryRecord {
@@ -895,7 +2465,7 @@ type StringList struct {
 
 func (x *StringList) Reset() {
 	*x = StringList{}
-	mi := &file_synapse_v1_agent_proto_msgTypes[14]
+	mi := &file_synapse_v1_agent_proto_msgTypes[29]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -907,7 +2477,7 @@ func (x *StringList) String() string {
 func (*StringList) ProtoMessage() {}
 
 func (x *StringList) ProtoReflect() protoreflect.Message {
-	mi := &file_synapse_v1_agent_proto_msgTypes[14]
+	mi := &file_synapse_v1_agent_proto_msgTypes[29]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -920,7 +2490,7 @@ func (x *StringList) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use StringList.ProtoReflect.Descriptor instead.
 func (*StringList) Descriptor() ([]byte, []int) {
-	return file_synapse_v1_agent_proto_rawDescGZIP(), []int{14}
+	return file_synapse_v1_agent_proto_rawDescGZIP(), []int{29}
 }
 
 func (x *StringList) GetItems() []string {
@@ -945,7 +2515,7 @@ type ToolPolicy struct {
 
 func (x *ToolPolicy) Reset() {
 	*x = ToolPolicy{}
-	mi := &file_synapse_v1_agent_proto_msgTypes[15]
+	mi := &file_synapse_v1_agent_proto_msgTypes[30]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -957,7 +2527,7 @@ func (x *ToolPolicy) String() string {
 func (*ToolPolicy) ProtoMessage() {}
 
 func (x *ToolPolicy) ProtoReflect() protoreflect.Message {
-	mi := &file_synapse_v1_agent_proto_msgTypes[15]
+	mi := &file_synapse_v1_agent_proto_msgTypes[30]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -970,7 +2540,7 @@ func (x *ToolPolicy) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ToolPolicy.ProtoReflect.Descriptor instead.
 func (*ToolPolicy) Descriptor() ([]byte, []int) {
-	return file_synapse_v1_agent_proto_rawDescGZIP(), []int{15}
+	return file_synapse_v1_agent_proto_rawDescGZIP(), []int{30}
 }
 
 func (x *ToolPolicy) GetRoleAllow() map[string]*StringList {
@@ -1030,7 +2600,7 @@ type GetToolPolicyRequest struct {
 
 func (x *GetToolPolicyRequest) Reset() {
 	*x = GetToolPolicyRequest{}
-	mi := &file_synapse_v1_agent_proto_msgTypes[16]
+	mi := &file_synapse_v1_agent_proto_msgTypes[31]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1042,7 +2612,7 @@ func (x *GetToolPolicyRequest) String() string {
 func (*GetToolPolicyRequest) ProtoMessage() {}
 
 func (x *GetToolPolicyRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_synapse_v1_agent_proto_msgTypes[16]
+	mi := &file_synapse_v1_agent_proto_msgTypes[31]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1055,7 +2625,7 @@ func (x *GetToolPolicyRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetToolPolicyRequest.ProtoReflect.Descriptor instead.
 func (*GetToolPolicyRequest) Descriptor() ([]byte, []int) {
-	return file_synapse_v1_agent_proto_rawDescGZIP(), []int{16}
+	return file_synapse_v1_agent_proto_rawDescGZIP(), []int{31}
 }
 
 type GetToolPolicyResponse struct {
@@ -1067,7 +2637,7 @@ type GetToolPolicyResponse struct {
 
 func (x *GetToolPolicyResponse) Reset() {
 	*x = GetToolPolicyResponse{}
-	mi := &file_synapse_v1_agent_proto_msgTypes[17]
+	mi := &file_synapse_v1_agent_proto_msgTypes[32]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1079,7 +2649,7 @@ func (x *GetToolPolicyResponse) String() string {
 func (*GetToolPolicyResponse) ProtoMessage() {}
 
 func (x *GetToolPolicyResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_synapse_v1_agent_proto_msgTypes[17]
+	mi := &file_synapse_v1_agent_proto_msgTypes[32]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1092,7 +2662,7 @@ func (x *GetToolPolicyResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetToolPolicyResponse.ProtoReflect.Descriptor instead.
 func (*GetToolPolicyResponse) Descriptor() ([]byte, []int) {
-	return file_synapse_v1_agent_proto_rawDescGZIP(), []int{17}
+	return file_synapse_v1_agent_proto_rawDescGZIP(), []int{32}
 }
 
 func (x *GetToolPolicyResponse) GetPolicy() *ToolPolicy {
@@ -1111,7 +2681,7 @@ type ApplyToolPolicyRequest struct {
 
 func (x *ApplyToolPolicyRequest) Reset() {
 	*x = ApplyToolPolicyRequest{}
-	mi := &file_synapse_v1_agent_proto_msgTypes[18]
+	mi := &file_synapse_v1_agent_proto_msgTypes[33]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1123,7 +2693,7 @@ func (x *ApplyToolPolicyRequest) String() string {
 func (*ApplyToolPolicyRequest) ProtoMessage() {}
 
 func (x *ApplyToolPolicyRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_synapse_v1_agent_proto_msgTypes[18]
+	mi := &file_synapse_v1_agent_proto_msgTypes[33]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1136,7 +2706,7 @@ func (x *ApplyToolPolicyRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ApplyToolPolicyRequest.ProtoReflect.Descriptor instead.
 func (*ApplyToolPolicyRequest) Descriptor() ([]byte, []int) {
-	return file_synapse_v1_agent_proto_rawDescGZIP(), []int{18}
+	return file_synapse_v1_agent_proto_rawDescGZIP(), []int{33}
 }
 
 func (x *ApplyToolPolicyRequest) GetPolicy() *ToolPolicy {
@@ -1156,7 +2726,7 @@ type ApplyToolPolicyResponse struct {
 
 func (x *ApplyToolPolicyResponse) Reset() {
 	*x = ApplyToolPolicyResponse{}
-	mi := &file_synapse_v1_agent_proto_msgTypes[19]
+	mi := &file_synapse_v1_agent_proto_msgTypes[34]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1168,7 +2738,7 @@ func (x *ApplyToolPolicyResponse) String() string {
 func (*ApplyToolPolicyResponse) ProtoMessage() {}
 
 func (x *ApplyToolPolicyResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_synapse_v1_agent_proto_msgTypes[19]
+	mi := &file_synapse_v1_agent_proto_msgTypes[34]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1181,7 +2751,7 @@ func (x *ApplyToolPolicyResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ApplyToolPolicyResponse.ProtoReflect.Descriptor instead.
 func (*ApplyToolPolicyResponse) Descriptor() ([]byte, []int) {
-	return file_synapse_v1_agent_proto_rawDescGZIP(), []int{19}
+	return file_synapse_v1_agent_proto_rawDescGZIP(), []int{34}
 }
 
 func (x *ApplyToolPolicyResponse) GetPolicy() *ToolPolicy {
@@ -1206,7 +2776,7 @@ type ListToolsRequest struct {
 
 func (x *ListToolsRequest) Reset() {
 	*x = ListToolsRequest{}
-	mi := &file_synapse_v1_agent_proto_msgTypes[20]
+	mi := &file_synapse_v1_agent_proto_msgTypes[35]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1218,7 +2788,7 @@ func (x *ListToolsRequest) String() string {
 func (*ListToolsRequest) ProtoMessage() {}
 
 func (x *ListToolsRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_synapse_v1_agent_proto_msgTypes[20]
+	mi := &file_synapse_v1_agent_proto_msgTypes[35]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1231,7 +2801,7 @@ func (x *ListToolsRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListToolsRequest.ProtoReflect.Descriptor instead.
 func (*ListToolsRequest) Descriptor() ([]byte, []int) {
-	return file_synapse_v1_agent_proto_rawDescGZIP(), []int{20}
+	return file_synapse_v1_agent_proto_rawDescGZIP(), []int{35}
 }
 
 type ToolDescriptor struct {
@@ -1249,7 +2819,7 @@ type ToolDescriptor struct {
 
 func (x *ToolDescriptor) Reset() {
 	*x = ToolDescriptor{}
-	mi := &file_synapse_v1_agent_proto_msgTypes[21]
+	mi := &file_synapse_v1_agent_proto_msgTypes[36]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1261,7 +2831,7 @@ func (x *ToolDescriptor) String() string {
 func (*ToolDescriptor) ProtoMessage() {}
 
 func (x *ToolDescriptor) ProtoReflect() protoreflect.Message {
-	mi := &file_synapse_v1_agent_proto_msgTypes[21]
+	mi := &file_synapse_v1_agent_proto_msgTypes[36]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1274,7 +2844,7 @@ func (x *ToolDescriptor) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ToolDescriptor.ProtoReflect.Descriptor instead.
 func (*ToolDescriptor) Descriptor() ([]byte, []int) {
-	return file_synapse_v1_agent_proto_rawDescGZIP(), []int{21}
+	return file_synapse_v1_agent_proto_rawDescGZIP(), []int{36}
 }
 
 func (x *ToolDescriptor) GetName() string {
@@ -1335,7 +2905,7 @@ type ListToolsResponse struct {
 
 func (x *ListToolsResponse) Reset() {
 	*x = ListToolsResponse{}
-	mi := &file_synapse_v1_agent_proto_msgTypes[22]
+	mi := &file_synapse_v1_agent_proto_msgTypes[37]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1347,7 +2917,7 @@ func (x *ListToolsResponse) String() string {
 func (*ListToolsResponse) ProtoMessage() {}
 
 func (x *ListToolsResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_synapse_v1_agent_proto_msgTypes[22]
+	mi := &file_synapse_v1_agent_proto_msgTypes[37]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1360,7 +2930,7 @@ func (x *ListToolsResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListToolsResponse.ProtoReflect.Descriptor instead.
 func (*ListToolsResponse) Descriptor() ([]byte, []int) {
-	return file_synapse_v1_agent_proto_rawDescGZIP(), []int{22}
+	return file_synapse_v1_agent_proto_rawDescGZIP(), []int{37}
 }
 
 func (x *ListToolsResponse) GetItems() []*ToolDescriptor {
@@ -1387,14 +2957,184 @@ const file_synapse_v1_agent_proto_rawDesc = "" +
 	"\bmetadata\x18\x04 \x03(\v2+.synapse.v1.SubmitTaskRequest.MetadataEntryR\bmetadata\x1a;\n" +
 	"\rMetadataEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
-	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"\xb4\x01\n" +
+	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"\xba\b\n" +
 	"\n" +
 	"AgentEvent\x12.\n" +
 	"\x04type\x18\x01 \x01(\x0e2\x1a.synapse.v1.AgentEventTypeR\x04type\x12\x18\n" +
 	"\amessage\x18\x02 \x01(\tR\amessage\x12\x14\n" +
 	"\x05token\x18\x03 \x01(\tR\x05token\x12\x19\n" +
 	"\btrace_id\x18\x04 \x01(\tR\atraceId\x12+\n" +
-	"\x12emitted_at_unix_ms\x18\x05 \x01(\x03R\x0femittedAtUnixMs\"\xdd\x01\n" +
+	"\x12emitted_at_unix_ms\x18\x05 \x01(\x03R\x0femittedAtUnixMs\x12%\n" +
+	"\x0eschema_version\x18\x06 \x01(\tR\rschemaVersion\x127\n" +
+	"\bperceive\x18\x14 \x01(\v2\x19.synapse.v1.PerceiveEventH\x00R\bperceive\x12+\n" +
+	"\x04plan\x18\x15 \x01(\v2\x15.synapse.v1.PlanEventH\x00R\x04plan\x12D\n" +
+	"\rtool_selected\x18\x16 \x01(\v2\x1d.synapse.v1.ToolSelectedEventH\x00R\ftoolSelected\x12A\n" +
+	"\ftool_started\x18\x17 \x01(\v2\x1c.synapse.v1.ToolStartedEventH\x00R\vtoolStarted\x12D\n" +
+	"\rtool_finished\x18\x18 \x01(\v2\x1d.synapse.v1.ToolFinishedEventH\x00R\ftoolFinished\x12P\n" +
+	"\x11approval_required\x18\x19 \x01(\v2!.synapse.v1.ApprovalRequiredEventH\x00R\x10approvalRequired\x12D\n" +
+	"\rmemory_recall\x18\x1a \x01(\v2\x1d.synapse.v1.MemoryRecallEventH\x00R\fmemoryRecall\x12A\n" +
+	"\fmemory_write\x18\x1b \x01(\v2\x1c.synapse.v1.MemoryWriteEventH\x00R\vmemoryWrite\x12=\n" +
+	"\n" +
+	"evaluation\x18\x1c \x01(\v2\x1b.synapse.v1.EvaluationEventH\x00R\n" +
+	"evaluation\x121\n" +
+	"\x06replan\x18\x1d \x01(\v2\x17.synapse.v1.ReplanEventH\x00R\x06replan\x12G\n" +
+	"\x0esynthesis_mode\x18\x1e \x01(\v2\x1e.synapse.v1.SynthesisModeEventH\x00R\rsynthesisMode\x12>\n" +
+	"\vtool_failed\x18\x1f \x01(\v2\x1b.synapse.v1.ToolFailedEventH\x00R\n" +
+	"toolFailed\x12A\n" +
+	"\ftool_skipped\x18  \x01(\v2\x1c.synapse.v1.ToolSkippedEventH\x00R\vtoolSkippedB\x0f\n" +
+	"\rtyped_payload\"\x8c\x01\n" +
+	"\rPerceiveEvent\x12\x17\n" +
+	"\atask_id\x18\x01 \x01(\tR\x06taskId\x12.\n" +
+	"\x13short_context_count\x18\x02 \x01(\x05R\x11shortContextCount\x122\n" +
+	"\x15recalled_memory_count\x18\x03 \x01(\x05R\x13recalledMemoryCount\"@\n" +
+	"\tPlanEvent\x12\x1d\n" +
+	"\n" +
+	"step_count\x18\x01 \x01(\x05R\tstepCount\x12\x14\n" +
+	"\x05steps\x18\x02 \x03(\tR\x05steps\"\xa5\x02\n" +
+	"\x11ToolSelectedEvent\x12\x1d\n" +
+	"\n" +
+	"step_index\x18\x01 \x01(\x05R\tstepIndex\x12\x1c\n" +
+	"\tobjective\x18\x02 \x01(\tR\tobjective\x12\x1b\n" +
+	"\ttool_name\x18\x03 \x01(\tR\btoolName\x12 \n" +
+	"\ftool_call_id\x18\x04 \x01(\tR\n" +
+	"toolCallId\x12\x1d\n" +
+	"\n" +
+	"risk_level\x18\x05 \x01(\tR\triskLevel\x12#\n" +
+	"\rinput_preview\x18\x06 \x01(\tR\finputPreview\x12+\n" +
+	"\x11requires_approval\x18\a \x01(\bR\x10requiresApproval\x12#\n" +
+	"\rprovider_name\x18\b \x01(\tR\fproviderName\"\xa4\x02\n" +
+	"\x10ToolStartedEvent\x12\x1d\n" +
+	"\n" +
+	"step_index\x18\x01 \x01(\x05R\tstepIndex\x12\x1c\n" +
+	"\tobjective\x18\x02 \x01(\tR\tobjective\x12\x1b\n" +
+	"\ttool_name\x18\x03 \x01(\tR\btoolName\x12 \n" +
+	"\ftool_call_id\x18\x04 \x01(\tR\n" +
+	"toolCallId\x12\x1d\n" +
+	"\n" +
+	"risk_level\x18\x05 \x01(\tR\triskLevel\x12#\n" +
+	"\rinput_preview\x18\x06 \x01(\tR\finputPreview\x12+\n" +
+	"\x11requires_approval\x18\a \x01(\bR\x10requiresApproval\x12#\n" +
+	"\rprovider_name\x18\b \x01(\tR\fproviderName\"\xc1\x03\n" +
+	"\x11ToolFinishedEvent\x12\x1d\n" +
+	"\n" +
+	"step_index\x18\x01 \x01(\x05R\tstepIndex\x12\x1c\n" +
+	"\tobjective\x18\x02 \x01(\tR\tobjective\x12\x1b\n" +
+	"\ttool_name\x18\x03 \x01(\tR\btoolName\x12 \n" +
+	"\ftool_call_id\x18\x04 \x01(\tR\n" +
+	"toolCallId\x12\x1d\n" +
+	"\n" +
+	"risk_level\x18\x05 \x01(\tR\triskLevel\x12#\n" +
+	"\rinput_preview\x18\x06 \x01(\tR\finputPreview\x12%\n" +
+	"\x0eoutput_preview\x18\a \x01(\tR\routputPreview\x12\x1f\n" +
+	"\vduration_ms\x18\b \x01(\x03R\n" +
+	"durationMs\x12\x0e\n" +
+	"\x02ok\x18\t \x01(\bR\x02ok\x12\x1d\n" +
+	"\n" +
+	"error_code\x18\n" +
+	" \x01(\tR\terrorCode\x12#\n" +
+	"\rerror_message\x18\v \x01(\tR\ferrorMessage\x12+\n" +
+	"\x11requires_approval\x18\f \x01(\bR\x10requiresApproval\x12#\n" +
+	"\rprovider_name\x18\r \x01(\tR\fproviderName\"\xbf\x03\n" +
+	"\x0fToolFailedEvent\x12\x1d\n" +
+	"\n" +
+	"step_index\x18\x01 \x01(\x05R\tstepIndex\x12\x1c\n" +
+	"\tobjective\x18\x02 \x01(\tR\tobjective\x12\x1b\n" +
+	"\ttool_name\x18\x03 \x01(\tR\btoolName\x12 \n" +
+	"\ftool_call_id\x18\x04 \x01(\tR\n" +
+	"toolCallId\x12\x1d\n" +
+	"\n" +
+	"risk_level\x18\x05 \x01(\tR\triskLevel\x12#\n" +
+	"\rinput_preview\x18\x06 \x01(\tR\finputPreview\x12%\n" +
+	"\x0eoutput_preview\x18\a \x01(\tR\routputPreview\x12\x1f\n" +
+	"\vduration_ms\x18\b \x01(\x03R\n" +
+	"durationMs\x12\x0e\n" +
+	"\x02ok\x18\t \x01(\bR\x02ok\x12\x1d\n" +
+	"\n" +
+	"error_code\x18\n" +
+	" \x01(\tR\terrorCode\x12#\n" +
+	"\rerror_message\x18\v \x01(\tR\ferrorMessage\x12+\n" +
+	"\x11requires_approval\x18\f \x01(\bR\x10requiresApproval\x12#\n" +
+	"\rprovider_name\x18\r \x01(\tR\fproviderName\"\xbc\x02\n" +
+	"\x10ToolSkippedEvent\x12\x1d\n" +
+	"\n" +
+	"step_index\x18\x01 \x01(\x05R\tstepIndex\x12\x1c\n" +
+	"\tobjective\x18\x02 \x01(\tR\tobjective\x12\x1b\n" +
+	"\ttool_name\x18\x03 \x01(\tR\btoolName\x12 \n" +
+	"\ftool_call_id\x18\x04 \x01(\tR\n" +
+	"toolCallId\x12\x1d\n" +
+	"\n" +
+	"risk_level\x18\x05 \x01(\tR\triskLevel\x12#\n" +
+	"\rinput_preview\x18\x06 \x01(\tR\finputPreview\x12\x16\n" +
+	"\x06reason\x18\a \x01(\tR\x06reason\x12+\n" +
+	"\x11requires_approval\x18\b \x01(\bR\x10requiresApproval\x12#\n" +
+	"\rprovider_name\x18\t \x01(\tR\fproviderName\"\xb6\x01\n" +
+	"\x15ApprovedToolCallEvent\x12\x1b\n" +
+	"\ttool_name\x18\x01 \x01(\tR\btoolName\x12\x1d\n" +
+	"\n" +
+	"tool_input\x18\x02 \x01(\tR\ttoolInput\x12\x1d\n" +
+	"\n" +
+	"risk_level\x18\x03 \x01(\tR\triskLevel\x12\x16\n" +
+	"\x06reason\x18\x04 \x01(\tR\x06reason\x12*\n" +
+	"\x11resume_step_index\x18\x05 \x01(\x05R\x0fresumeStepIndex\"\x8f\x03\n" +
+	"\x15ApprovalRequiredEvent\x12\x1d\n" +
+	"\n" +
+	"step_index\x18\x01 \x01(\x05R\tstepIndex\x12*\n" +
+	"\x11resume_step_index\x18\x02 \x01(\x05R\x0fresumeStepIndex\x12\x1b\n" +
+	"\ttool_name\x18\x03 \x01(\tR\btoolName\x12\x1d\n" +
+	"\n" +
+	"tool_input\x18\x04 \x01(\tR\ttoolInput\x12\x1d\n" +
+	"\n" +
+	"risk_level\x18\x05 \x01(\tR\triskLevel\x12\x16\n" +
+	"\x06reason\x18\x06 \x01(\tR\x06reason\x12 \n" +
+	"\ftool_call_id\x18\a \x01(\tR\n" +
+	"toolCallId\x12'\n" +
+	"\x0fapproval_reason\x18\b \x01(\tR\x0eapprovalReason\x12O\n" +
+	"\x12approved_tool_call\x18\t \x01(\v2!.synapse.v1.ApprovedToolCallEventR\x10approvedToolCall\x12\x1c\n" +
+	"\tobjective\x18\n" +
+	" \x01(\tR\tobjective\"\x90\x02\n" +
+	"\x0eMemoryEventHit\x12\x1b\n" +
+	"\tmemory_id\x18\x01 \x01(\tR\bmemoryId\x12\x18\n" +
+	"\asummary\x18\x02 \x01(\tR\asummary\x12'\n" +
+	"\x0fcontent_preview\x18\x03 \x01(\tR\x0econtentPreview\x12$\n" +
+	"\x0esource_task_id\x18\x04 \x01(\tR\fsourceTaskId\x12\x1e\n" +
+	"\n" +
+	"importance\x18\x05 \x01(\x01R\n" +
+	"importance\x12\x14\n" +
+	"\x05score\x18\x06 \x01(\x01R\x05score\x12#\n" +
+	"\rmatched_terms\x18\a \x03(\tR\fmatchedTerms\x12\x1d\n" +
+	"\n" +
+	"created_at\x18\b \x01(\x03R\tcreatedAt\"v\n" +
+	"\x11MemoryRecallEvent\x12\x14\n" +
+	"\x05query\x18\x01 \x01(\tR\x05query\x12\x1b\n" +
+	"\thit_count\x18\x02 \x01(\x05R\bhitCount\x12.\n" +
+	"\x04hits\x18\x03 \x03(\v2\x1a.synapse.v1.MemoryEventHitR\x04hits\"\xf0\x01\n" +
+	"\x10MemoryWriteEvent\x12\x1b\n" +
+	"\tmemory_id\x18\x01 \x01(\tR\bmemoryId\x12\x17\n" +
+	"\auser_id\x18\x02 \x01(\tR\x06userId\x12\x18\n" +
+	"\asummary\x18\x03 \x01(\tR\asummary\x12'\n" +
+	"\x0fcontent_preview\x18\x04 \x01(\tR\x0econtentPreview\x12$\n" +
+	"\x0esource_task_id\x18\x05 \x01(\tR\fsourceTaskId\x12\x1e\n" +
+	"\n" +
+	"importance\x18\x06 \x01(\x01R\n" +
+	"importance\x12\x1d\n" +
+	"\n" +
+	"created_at\x18\a \x01(\x03R\tcreatedAt\"\xe7\x01\n" +
+	"\x0fEvaluationEvent\x12+\n" +
+	"\x11estimated_success\x18\x01 \x01(\x01R\x10estimatedSuccess\x121\n" +
+	"\x14objective_completion\x18\x02 \x01(\x01R\x13objectiveCompletion\x12*\n" +
+	"\x11tool_success_rate\x18\x03 \x01(\x01R\x0ftoolSuccessRate\x12'\n" +
+	"\x0fblocked_actions\x18\x04 \x01(\x05R\x0eblockedActions\x12\x1f\n" +
+	"\vduration_ms\x18\x05 \x01(\x03R\n" +
+	"durationMs\"\x9e\x01\n" +
+	"\vReplanEvent\x12\x1d\n" +
+	"\n" +
+	"step_index\x18\x01 \x01(\x05R\tstepIndex\x12\x16\n" +
+	"\x06reason\x18\x02 \x01(\tR\x06reason\x12\x1b\n" +
+	"\tfrom_tool\x18\x03 \x01(\tR\bfromTool\x12\x17\n" +
+	"\ato_tool\x18\x04 \x01(\tR\x06toTool\x12\"\n" +
+	"\rto_tool_input\x18\x05 \x01(\tR\vtoToolInput\"(\n" +
+	"\x12SynthesisModeEvent\x12\x12\n" +
+	"\x04mode\x18\x01 \x01(\tR\x04mode\"\xdd\x01\n" +
 	"\fMemoryRecord\x12\x1b\n" +
 	"\tmemory_id\x18\x01 \x01(\tR\bmemoryId\x12\x17\n" +
 	"\auser_id\x18\x02 \x01(\tR\x06userId\x12\x18\n" +
@@ -1506,71 +3246,101 @@ func file_synapse_v1_agent_proto_rawDescGZIP() []byte {
 }
 
 var file_synapse_v1_agent_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
-var file_synapse_v1_agent_proto_msgTypes = make([]protoimpl.MessageInfo, 25)
+var file_synapse_v1_agent_proto_msgTypes = make([]protoimpl.MessageInfo, 40)
 var file_synapse_v1_agent_proto_goTypes = []any{
 	(AgentEventType)(0),             // 0: synapse.v1.AgentEventType
 	(*HealthRequest)(nil),           // 1: synapse.v1.HealthRequest
 	(*HealthResponse)(nil),          // 2: synapse.v1.HealthResponse
 	(*SubmitTaskRequest)(nil),       // 3: synapse.v1.SubmitTaskRequest
 	(*AgentEvent)(nil),              // 4: synapse.v1.AgentEvent
-	(*MemoryRecord)(nil),            // 5: synapse.v1.MemoryRecord
-	(*MemoryRecallHit)(nil),         // 6: synapse.v1.MemoryRecallHit
-	(*MemoryWriteRequest)(nil),      // 7: synapse.v1.MemoryWriteRequest
-	(*MemoryWriteResponse)(nil),     // 8: synapse.v1.MemoryWriteResponse
-	(*MemoryRecallRequest)(nil),     // 9: synapse.v1.MemoryRecallRequest
-	(*MemoryRecallResponse)(nil),    // 10: synapse.v1.MemoryRecallResponse
-	(*MemoryDeleteRequest)(nil),     // 11: synapse.v1.MemoryDeleteRequest
-	(*MemoryDeleteResponse)(nil),    // 12: synapse.v1.MemoryDeleteResponse
-	(*MemoryListRequest)(nil),       // 13: synapse.v1.MemoryListRequest
-	(*MemoryListResponse)(nil),      // 14: synapse.v1.MemoryListResponse
-	(*StringList)(nil),              // 15: synapse.v1.StringList
-	(*ToolPolicy)(nil),              // 16: synapse.v1.ToolPolicy
-	(*GetToolPolicyRequest)(nil),    // 17: synapse.v1.GetToolPolicyRequest
-	(*GetToolPolicyResponse)(nil),   // 18: synapse.v1.GetToolPolicyResponse
-	(*ApplyToolPolicyRequest)(nil),  // 19: synapse.v1.ApplyToolPolicyRequest
-	(*ApplyToolPolicyResponse)(nil), // 20: synapse.v1.ApplyToolPolicyResponse
-	(*ListToolsRequest)(nil),        // 21: synapse.v1.ListToolsRequest
-	(*ToolDescriptor)(nil),          // 22: synapse.v1.ToolDescriptor
-	(*ListToolsResponse)(nil),       // 23: synapse.v1.ListToolsResponse
-	nil,                             // 24: synapse.v1.SubmitTaskRequest.MetadataEntry
-	nil,                             // 25: synapse.v1.ToolPolicy.RoleAllowEntry
+	(*PerceiveEvent)(nil),           // 5: synapse.v1.PerceiveEvent
+	(*PlanEvent)(nil),               // 6: synapse.v1.PlanEvent
+	(*ToolSelectedEvent)(nil),       // 7: synapse.v1.ToolSelectedEvent
+	(*ToolStartedEvent)(nil),        // 8: synapse.v1.ToolStartedEvent
+	(*ToolFinishedEvent)(nil),       // 9: synapse.v1.ToolFinishedEvent
+	(*ToolFailedEvent)(nil),         // 10: synapse.v1.ToolFailedEvent
+	(*ToolSkippedEvent)(nil),        // 11: synapse.v1.ToolSkippedEvent
+	(*ApprovedToolCallEvent)(nil),   // 12: synapse.v1.ApprovedToolCallEvent
+	(*ApprovalRequiredEvent)(nil),   // 13: synapse.v1.ApprovalRequiredEvent
+	(*MemoryEventHit)(nil),          // 14: synapse.v1.MemoryEventHit
+	(*MemoryRecallEvent)(nil),       // 15: synapse.v1.MemoryRecallEvent
+	(*MemoryWriteEvent)(nil),        // 16: synapse.v1.MemoryWriteEvent
+	(*EvaluationEvent)(nil),         // 17: synapse.v1.EvaluationEvent
+	(*ReplanEvent)(nil),             // 18: synapse.v1.ReplanEvent
+	(*SynthesisModeEvent)(nil),      // 19: synapse.v1.SynthesisModeEvent
+	(*MemoryRecord)(nil),            // 20: synapse.v1.MemoryRecord
+	(*MemoryRecallHit)(nil),         // 21: synapse.v1.MemoryRecallHit
+	(*MemoryWriteRequest)(nil),      // 22: synapse.v1.MemoryWriteRequest
+	(*MemoryWriteResponse)(nil),     // 23: synapse.v1.MemoryWriteResponse
+	(*MemoryRecallRequest)(nil),     // 24: synapse.v1.MemoryRecallRequest
+	(*MemoryRecallResponse)(nil),    // 25: synapse.v1.MemoryRecallResponse
+	(*MemoryDeleteRequest)(nil),     // 26: synapse.v1.MemoryDeleteRequest
+	(*MemoryDeleteResponse)(nil),    // 27: synapse.v1.MemoryDeleteResponse
+	(*MemoryListRequest)(nil),       // 28: synapse.v1.MemoryListRequest
+	(*MemoryListResponse)(nil),      // 29: synapse.v1.MemoryListResponse
+	(*StringList)(nil),              // 30: synapse.v1.StringList
+	(*ToolPolicy)(nil),              // 31: synapse.v1.ToolPolicy
+	(*GetToolPolicyRequest)(nil),    // 32: synapse.v1.GetToolPolicyRequest
+	(*GetToolPolicyResponse)(nil),   // 33: synapse.v1.GetToolPolicyResponse
+	(*ApplyToolPolicyRequest)(nil),  // 34: synapse.v1.ApplyToolPolicyRequest
+	(*ApplyToolPolicyResponse)(nil), // 35: synapse.v1.ApplyToolPolicyResponse
+	(*ListToolsRequest)(nil),        // 36: synapse.v1.ListToolsRequest
+	(*ToolDescriptor)(nil),          // 37: synapse.v1.ToolDescriptor
+	(*ListToolsResponse)(nil),       // 38: synapse.v1.ListToolsResponse
+	nil,                             // 39: synapse.v1.SubmitTaskRequest.MetadataEntry
+	nil,                             // 40: synapse.v1.ToolPolicy.RoleAllowEntry
 }
 var file_synapse_v1_agent_proto_depIdxs = []int32{
-	24, // 0: synapse.v1.SubmitTaskRequest.metadata:type_name -> synapse.v1.SubmitTaskRequest.MetadataEntry
+	39, // 0: synapse.v1.SubmitTaskRequest.metadata:type_name -> synapse.v1.SubmitTaskRequest.MetadataEntry
 	0,  // 1: synapse.v1.AgentEvent.type:type_name -> synapse.v1.AgentEventType
-	5,  // 2: synapse.v1.MemoryRecallHit.record:type_name -> synapse.v1.MemoryRecord
-	5,  // 3: synapse.v1.MemoryWriteResponse.record:type_name -> synapse.v1.MemoryRecord
-	6,  // 4: synapse.v1.MemoryRecallResponse.hits:type_name -> synapse.v1.MemoryRecallHit
-	5,  // 5: synapse.v1.MemoryListResponse.items:type_name -> synapse.v1.MemoryRecord
-	25, // 6: synapse.v1.ToolPolicy.role_allow:type_name -> synapse.v1.ToolPolicy.RoleAllowEntry
-	16, // 7: synapse.v1.GetToolPolicyResponse.policy:type_name -> synapse.v1.ToolPolicy
-	16, // 8: synapse.v1.ApplyToolPolicyRequest.policy:type_name -> synapse.v1.ToolPolicy
-	16, // 9: synapse.v1.ApplyToolPolicyResponse.policy:type_name -> synapse.v1.ToolPolicy
-	22, // 10: synapse.v1.ListToolsResponse.items:type_name -> synapse.v1.ToolDescriptor
-	15, // 11: synapse.v1.ToolPolicy.RoleAllowEntry.value:type_name -> synapse.v1.StringList
-	1,  // 12: synapse.v1.AgentRuntime.Health:input_type -> synapse.v1.HealthRequest
-	3,  // 13: synapse.v1.AgentRuntime.SubmitTask:input_type -> synapse.v1.SubmitTaskRequest
-	7,  // 14: synapse.v1.AgentRuntime.MemoryWrite:input_type -> synapse.v1.MemoryWriteRequest
-	9,  // 15: synapse.v1.AgentRuntime.MemoryRecall:input_type -> synapse.v1.MemoryRecallRequest
-	11, // 16: synapse.v1.AgentRuntime.MemoryDelete:input_type -> synapse.v1.MemoryDeleteRequest
-	13, // 17: synapse.v1.AgentRuntime.MemoryList:input_type -> synapse.v1.MemoryListRequest
-	17, // 18: synapse.v1.AgentRuntime.GetToolPolicy:input_type -> synapse.v1.GetToolPolicyRequest
-	19, // 19: synapse.v1.AgentRuntime.ApplyToolPolicy:input_type -> synapse.v1.ApplyToolPolicyRequest
-	21, // 20: synapse.v1.AgentRuntime.ListTools:input_type -> synapse.v1.ListToolsRequest
-	2,  // 21: synapse.v1.AgentRuntime.Health:output_type -> synapse.v1.HealthResponse
-	4,  // 22: synapse.v1.AgentRuntime.SubmitTask:output_type -> synapse.v1.AgentEvent
-	8,  // 23: synapse.v1.AgentRuntime.MemoryWrite:output_type -> synapse.v1.MemoryWriteResponse
-	10, // 24: synapse.v1.AgentRuntime.MemoryRecall:output_type -> synapse.v1.MemoryRecallResponse
-	12, // 25: synapse.v1.AgentRuntime.MemoryDelete:output_type -> synapse.v1.MemoryDeleteResponse
-	14, // 26: synapse.v1.AgentRuntime.MemoryList:output_type -> synapse.v1.MemoryListResponse
-	18, // 27: synapse.v1.AgentRuntime.GetToolPolicy:output_type -> synapse.v1.GetToolPolicyResponse
-	20, // 28: synapse.v1.AgentRuntime.ApplyToolPolicy:output_type -> synapse.v1.ApplyToolPolicyResponse
-	23, // 29: synapse.v1.AgentRuntime.ListTools:output_type -> synapse.v1.ListToolsResponse
-	21, // [21:30] is the sub-list for method output_type
-	12, // [12:21] is the sub-list for method input_type
-	12, // [12:12] is the sub-list for extension type_name
-	12, // [12:12] is the sub-list for extension extendee
-	0,  // [0:12] is the sub-list for field type_name
+	5,  // 2: synapse.v1.AgentEvent.perceive:type_name -> synapse.v1.PerceiveEvent
+	6,  // 3: synapse.v1.AgentEvent.plan:type_name -> synapse.v1.PlanEvent
+	7,  // 4: synapse.v1.AgentEvent.tool_selected:type_name -> synapse.v1.ToolSelectedEvent
+	8,  // 5: synapse.v1.AgentEvent.tool_started:type_name -> synapse.v1.ToolStartedEvent
+	9,  // 6: synapse.v1.AgentEvent.tool_finished:type_name -> synapse.v1.ToolFinishedEvent
+	13, // 7: synapse.v1.AgentEvent.approval_required:type_name -> synapse.v1.ApprovalRequiredEvent
+	15, // 8: synapse.v1.AgentEvent.memory_recall:type_name -> synapse.v1.MemoryRecallEvent
+	16, // 9: synapse.v1.AgentEvent.memory_write:type_name -> synapse.v1.MemoryWriteEvent
+	17, // 10: synapse.v1.AgentEvent.evaluation:type_name -> synapse.v1.EvaluationEvent
+	18, // 11: synapse.v1.AgentEvent.replan:type_name -> synapse.v1.ReplanEvent
+	19, // 12: synapse.v1.AgentEvent.synthesis_mode:type_name -> synapse.v1.SynthesisModeEvent
+	10, // 13: synapse.v1.AgentEvent.tool_failed:type_name -> synapse.v1.ToolFailedEvent
+	11, // 14: synapse.v1.AgentEvent.tool_skipped:type_name -> synapse.v1.ToolSkippedEvent
+	12, // 15: synapse.v1.ApprovalRequiredEvent.approved_tool_call:type_name -> synapse.v1.ApprovedToolCallEvent
+	14, // 16: synapse.v1.MemoryRecallEvent.hits:type_name -> synapse.v1.MemoryEventHit
+	20, // 17: synapse.v1.MemoryRecallHit.record:type_name -> synapse.v1.MemoryRecord
+	20, // 18: synapse.v1.MemoryWriteResponse.record:type_name -> synapse.v1.MemoryRecord
+	21, // 19: synapse.v1.MemoryRecallResponse.hits:type_name -> synapse.v1.MemoryRecallHit
+	20, // 20: synapse.v1.MemoryListResponse.items:type_name -> synapse.v1.MemoryRecord
+	40, // 21: synapse.v1.ToolPolicy.role_allow:type_name -> synapse.v1.ToolPolicy.RoleAllowEntry
+	31, // 22: synapse.v1.GetToolPolicyResponse.policy:type_name -> synapse.v1.ToolPolicy
+	31, // 23: synapse.v1.ApplyToolPolicyRequest.policy:type_name -> synapse.v1.ToolPolicy
+	31, // 24: synapse.v1.ApplyToolPolicyResponse.policy:type_name -> synapse.v1.ToolPolicy
+	37, // 25: synapse.v1.ListToolsResponse.items:type_name -> synapse.v1.ToolDescriptor
+	30, // 26: synapse.v1.ToolPolicy.RoleAllowEntry.value:type_name -> synapse.v1.StringList
+	1,  // 27: synapse.v1.AgentRuntime.Health:input_type -> synapse.v1.HealthRequest
+	3,  // 28: synapse.v1.AgentRuntime.SubmitTask:input_type -> synapse.v1.SubmitTaskRequest
+	22, // 29: synapse.v1.AgentRuntime.MemoryWrite:input_type -> synapse.v1.MemoryWriteRequest
+	24, // 30: synapse.v1.AgentRuntime.MemoryRecall:input_type -> synapse.v1.MemoryRecallRequest
+	26, // 31: synapse.v1.AgentRuntime.MemoryDelete:input_type -> synapse.v1.MemoryDeleteRequest
+	28, // 32: synapse.v1.AgentRuntime.MemoryList:input_type -> synapse.v1.MemoryListRequest
+	32, // 33: synapse.v1.AgentRuntime.GetToolPolicy:input_type -> synapse.v1.GetToolPolicyRequest
+	34, // 34: synapse.v1.AgentRuntime.ApplyToolPolicy:input_type -> synapse.v1.ApplyToolPolicyRequest
+	36, // 35: synapse.v1.AgentRuntime.ListTools:input_type -> synapse.v1.ListToolsRequest
+	2,  // 36: synapse.v1.AgentRuntime.Health:output_type -> synapse.v1.HealthResponse
+	4,  // 37: synapse.v1.AgentRuntime.SubmitTask:output_type -> synapse.v1.AgentEvent
+	23, // 38: synapse.v1.AgentRuntime.MemoryWrite:output_type -> synapse.v1.MemoryWriteResponse
+	25, // 39: synapse.v1.AgentRuntime.MemoryRecall:output_type -> synapse.v1.MemoryRecallResponse
+	27, // 40: synapse.v1.AgentRuntime.MemoryDelete:output_type -> synapse.v1.MemoryDeleteResponse
+	29, // 41: synapse.v1.AgentRuntime.MemoryList:output_type -> synapse.v1.MemoryListResponse
+	33, // 42: synapse.v1.AgentRuntime.GetToolPolicy:output_type -> synapse.v1.GetToolPolicyResponse
+	35, // 43: synapse.v1.AgentRuntime.ApplyToolPolicy:output_type -> synapse.v1.ApplyToolPolicyResponse
+	38, // 44: synapse.v1.AgentRuntime.ListTools:output_type -> synapse.v1.ListToolsResponse
+	36, // [36:45] is the sub-list for method output_type
+	27, // [27:36] is the sub-list for method input_type
+	27, // [27:27] is the sub-list for extension type_name
+	27, // [27:27] is the sub-list for extension extendee
+	0,  // [0:27] is the sub-list for field type_name
 }
 
 func init() { file_synapse_v1_agent_proto_init() }
@@ -1578,13 +3348,28 @@ func file_synapse_v1_agent_proto_init() {
 	if File_synapse_v1_agent_proto != nil {
 		return
 	}
+	file_synapse_v1_agent_proto_msgTypes[3].OneofWrappers = []any{
+		(*AgentEvent_Perceive)(nil),
+		(*AgentEvent_Plan)(nil),
+		(*AgentEvent_ToolSelected)(nil),
+		(*AgentEvent_ToolStarted)(nil),
+		(*AgentEvent_ToolFinished)(nil),
+		(*AgentEvent_ApprovalRequired)(nil),
+		(*AgentEvent_MemoryRecall)(nil),
+		(*AgentEvent_MemoryWrite)(nil),
+		(*AgentEvent_Evaluation)(nil),
+		(*AgentEvent_Replan)(nil),
+		(*AgentEvent_SynthesisMode)(nil),
+		(*AgentEvent_ToolFailed)(nil),
+		(*AgentEvent_ToolSkipped)(nil),
+	}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_synapse_v1_agent_proto_rawDesc), len(file_synapse_v1_agent_proto_rawDesc)),
 			NumEnums:      1,
-			NumMessages:   25,
+			NumMessages:   40,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

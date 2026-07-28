@@ -152,11 +152,21 @@ func (h *Handler) Healthz(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	writeJSON(w, http.StatusOK, map[string]any{
+	payload := map[string]any{
 		"status":         "ok",
 		"ai_engine":      health.Status,
 		"model_provider": health.ModelProvider,
-	})
+	}
+	if h.taskQueue != nil {
+		stats, statsErr := h.taskQueue.Stats(ctx)
+		if statsErr != nil {
+			payload["task_queue_error"] = statsErr.Error()
+		} else {
+			payload["task_queue"] = stats
+		}
+	}
+
+	writeJSON(w, http.StatusOK, payload)
 }
 
 // CreateTask 校验请求并落库为 queued，再把任务 ID 入队等待异步执行。
@@ -856,6 +866,15 @@ func (h *Handler) StreamTaskEvents(w http.ResponseWriter, r *http.Request) {
 				"token":              event.Token,
 				"trace_id":           event.TraceID,
 				"emitted_at_unix_ms": event.EmittedAtUnixMS,
+			}
+			if event.SchemaVersion != "" {
+				payload["schema_version"] = event.SchemaVersion
+			}
+			if event.EventName != "" {
+				payload["event_name"] = event.EventName
+			}
+			if len(event.Payload) > 0 {
+				payload["payload"] = event.Payload
 			}
 
 			if err := writeSSE(w, event.Type, payload); err != nil {

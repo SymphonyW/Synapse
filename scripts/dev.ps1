@@ -9,6 +9,11 @@ param(
         "web",
         "agent-regression",
         "verify-agent-mode",
+        "migrate-up",
+        "migrate-down",
+        "migrate-status",
+        "migrate-baseline",
+        "migrate-create",
         "up",
         "up-mirror",
         "up-openai",
@@ -19,7 +24,12 @@ param(
         "up-zhipu-mirror",
         "down"
     )]
-    [string]$Task = "proto"
+    [string]$Task = "proto",
+
+    [string]$DatabaseUrl = "",
+    [string]$Name = "",
+    [int]$Steps = 1,
+    [uint32]$Version = 4
 )
 
 $ErrorActionPreference = "Stop"
@@ -97,6 +107,23 @@ if config.model_provider == "openai" and not config.openai_api_key:
     }
 }
 
+function Invoke-Migration {
+    param(
+        [ValidateSet("up", "down", "status", "baseline", "create")]
+        [string]$Command
+    )
+
+    $args = @("-Command", $Command)
+    if (-not [string]::IsNullOrWhiteSpace($DatabaseUrl)) {
+        $args += @("-DatabaseUrl", $DatabaseUrl)
+    }
+    if (-not [string]::IsNullOrWhiteSpace($Name)) {
+        $args += @("-Name", $Name)
+    }
+    $args += @("-Steps", $Steps.ToString(), "-Version", $Version.ToString())
+    & (Join-Path $PSScriptRoot "migrate.ps1") @args
+}
+
 switch ($Task) {
     "proto" {
         Invoke-ProtoGo
@@ -151,6 +178,26 @@ switch ($Task) {
     "verify-agent-mode" {
         # 校验并打印当前 Agent 运行模式关键配置。
         Invoke-VerifyAgentMode
+    }
+    "migrate-up" {
+        # 将 PostgreSQL schema 升级到当前版本。
+        Invoke-Migration -Command "up"
+    }
+    "migrate-down" {
+        # 回滚最近 N 个 migration；破坏性 down 请先备份。
+        Invoke-Migration -Command "down"
+    }
+    "migrate-status" {
+        # 查看当前 migration 版本与 dirty 状态。
+        Invoke-Migration -Command "status"
+    }
+    "migrate-baseline" {
+        # 兼容旧 ensureSchema 数据库：结构匹配后只记录版本，不执行 DDL。
+        Invoke-Migration -Command "baseline"
+    }
+    "migrate-create" {
+        # 创建下一组 up/down migration 文件。
+        Invoke-Migration -Command "create"
     }
     "up" {
         # 通过 Docker Compose 启动全部服务，后台运行。

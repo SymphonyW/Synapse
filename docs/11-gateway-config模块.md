@@ -29,7 +29,14 @@ Config 字段覆盖：
 | SYNAPSE_REDIS_ADDR | 空 | Redis 地址，空则不启用 Redis 队列 |
 | SYNAPSE_REDIS_PASSWORD | 空 | Redis 密码 |
 | SYNAPSE_REDIS_DB | 0 | Redis DB 库号 |
-| SYNAPSE_TASK_QUEUE | synapse:tasks | 队列名称 |
+| SYNAPSE_TASK_STREAM | synapse:tasks | Redis Stream key |
+| SYNAPSE_TASK_CONSUMER_GROUP | synapse-gateway | Redis Streams consumer group |
+| SYNAPSE_TASK_CONSUMER_NAME | 空 | Consumer 名称；空值时自动生成 |
+| SYNAPSE_TASK_VISIBILITY_TIMEOUT | 150s | Pending 超过该 idle 时间后可 reclaim |
+| SYNAPSE_TASK_RECLAIM_INTERVAL | 10s | Worker reclaim 周期 |
+| SYNAPSE_TASK_RECLAIM_BATCH_SIZE | 10 | 单轮 reclaim 数量 |
+| SYNAPSE_TASK_STREAM_MAXLEN | 10000 | Stream 近似最大长度 |
+| SYNAPSE_TASK_QUEUE | synapse:tasks | 旧配置名，仅作为 `SYNAPSE_TASK_STREAM` fallback |
 | SYNAPSE_TASK_MAX_ATTEMPTS | 3 | 最大重试次数 |
 | SYNAPSE_TASK_RETRY_BACKOFF | 2s | 重试间隔 |
 | SYNAPSE_TASK_EXEC_TIMEOUT | 120s | 单任务执行超时 |

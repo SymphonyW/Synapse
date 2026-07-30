@@ -18,7 +18,7 @@ Synapse 关注的不是“把模型回复显示在聊天框里”，而是 Agent
 
 它把 Web 控制台、Go Gateway、Python AI Engine、任务事件流、工具策略、长期记忆和回归评测放在同一个本地工程里。你可以先用 mock provider 零成本跑通全链路，再切到 OpenAI-compatible provider 验证真实模型效果。
 
-[快速启动](#快速启动) · [看完整工作流](#看完整工作流) · [架构](#架构) · [技术文档](docs/README.md) · [贡献指南](CONTRIBUTING.md)
+[快速启动](#快速启动) · [看完整工作流](#看完整工作流) · [架构](#架构) · [Roadmap](#roadmap) · [技术文档](docs/README.md) · [贡献指南](CONTRIBUTING.md)
 
 ![Synapse 总体架构图](docs/assets/architecture-overview.svg)
 
@@ -275,18 +275,29 @@ python -m app.benchmarks.live_benchmark --provider openai --markdown
 Set-Location ..\..
 ```
 
+## Roadmap
+
+当前唯一详细 Roadmap 事实来源是 [docs/roadmap.md](docs/roadmap.md)。
+
+| 项目 | 当前结论 |
+|---|---|
+| 版本目标 | Synapse v0.2 — Reliable Agent Runtime |
+| 当前阶段 | 已打通本地 Agent 控制链路，下一步聚焦可靠性、生产化和平台化 |
+| 最近三个里程碑 | M1 质量基线；M2 核心模块可维护性；M3 协议和持久化 |
+
 ## 当前边界
 
 Synapse 适合本地研究、架构验证、Demo 和二次开发。它已经有完整的 Agent 控制链路，但还不是可以直接进生产的发行版。
 
 | 已打通 | 仍需补齐 |
 |---|---|
-| 任务、事件、审批、记忆、Trace、Replay、Regression 主链路 | 生产级监控、告警和 SLO |
-| Docker Compose 一键启动全栈 | 生产级 HTTPS、Cookie Secure、CSRF、防爆破和 secret 管理 |
-| Gateway 版本化 PostgreSQL migration | 生产级 migration 审批与回滚演练 |
-| Redis Streams ack/reclaim 可靠任务投递 | Redis 队列多并发 worker 配置与压测 |
-| OpenAI-compatible provider、OpenAPI 工具、MCP stdio 接入 | 完整 OpenAPI/Swagger 文档 |
-| Web 管理工具策略并热更新到 AI Engine | CI/CD、镜像扫描、发布和回滚流程 |
+| 任务、事件、SSE 续读、审批恢复、死信、Replay 和 Replay Diff 主链路 | OpenTelemetry、metrics、告警和 SLO |
+| Web 工程化拆分、记忆管理、Trace 工作台、工具策略管理中心 | Agent Definition、Agent Version、Prompt/Tool/Policy 版本绑定 |
+| 文件记忆和 pgvector 记忆后端 | pgvector schema 纳入统一版本化 migration，补真实 embedding smoke |
+| OpenAI-compatible provider、OpenAPI 工具 executor、MCP stdio 接入 | 完整 OpenAPI/Swagger 文档和 SDK |
+| Gateway 版本化 PostgreSQL migration、Redis Streams ack/reclaim、Worker execution lease | 多 Worker 故障注入、队列指标、生产 migration 审批与回滚演练 |
+| CI 覆盖 Go/Python/Web/proto/mock regression，Docker smoke 可手动或 main 触发 | 发布流水线、镜像扫描、制品签名和回滚流程 |
+| 本地 Cookie Session 与 admin/user 权限边界 | production mode、Secure Cookie、CSRF/Origin、登录限流和 secret 管理 |
 
 ## 继续阅读
 
@@ -299,4 +310,4 @@ Synapse 适合本地研究、架构验证、Demo 和二次开发。它已经有�
 | 深入 AI Engine | [AI Engine 模块](docs/20-ai-engine模块.md) |
 | 深入 Web | [Web 模块](docs/30-web模块.md) |
 | 排查问题 | [运维排障手册](docs/50-运维排障手册.md) |
-| 看后续开发方向 | [后续开发任务清单](docs/61-后续开发任务清单.md) |
+| 看后续开发方向 | [当前 Roadmap](docs/roadmap.md) |

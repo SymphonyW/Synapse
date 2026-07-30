@@ -1,0 +1,113 @@
+name: Roadmap task
+description: Track a planned Synapse Roadmap item with scope, non-goals, and acceptance criteria.
+title: "[Roadmap]: "
+labels:
+  - roadmap
+body:
+  - type: dropdown
+    id: milestone
+    attributes:
+      label: Milestone
+      options:
+        - M1 - Quality baseline
+        - M2 - Core maintainability
+        - M3 - Protocol and persistence
+        - M4 - Reliable task delivery
+        - M5 - Production safety and observability
+        - M6 - Platform capabilities
+        - Deferred
+    validations:
+      required: true
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What concrete user, operator, or maintainer problem does this solve?
+      placeholder: Describe the current failure mode or gap.
+    validations:
+      required: true
+  - type: textarea
+    id: scope
+    attributes:
+      label: Scope
+      description: What is included in this task?
+      placeholder: List the specific behavior, API, UI, storage, or documentation changes.
+    validations:
+      required: true
+  - type: textarea
+    id: non_goals
+    attributes:
+      label: Non-goals
+      description: What is explicitly out of scope?
+      placeholder: List what this task will not attempt to solve.
+    validations:
+      required: true
+  - type: textarea
+    id: acceptance_criteria
+    attributes:
+      label: Acceptance criteria
+      description: Use observable, testable criteria.
+      placeholder: |
+        - Worker explicitly Ack's a Redis Stream delivery after terminal completion.
+        - A reclaimed delivery is processed by another consumer after the visibility timeout.
+    validations:
+      required: true
+  - type: textarea
+    id: affected_modules
+    attributes:
+      label: Affected modules
+      description: Include paths when known.
+      placeholder: |
+        - services/gateway-go/internal/worker
+        - services/ai-engine-py/app/runtime.py
+        - apps/web/src/features/trace
+    validations:
+      required: true
+  - type: textarea
+    id: test_plan
+    attributes:
+      label: Test plan
+      description: Which automated or manual checks prove this is done?
+      placeholder: |
+        - go test ./...
+        - python -m unittest discover -s tests -p "test_*.py"
+        - npm run test
+    validations:
+      required: true
+  - type: dropdown
+    id: migration_impact
+    attributes:
+      label: Migration impact
+      options:
+        - None
+        - Requires backward-compatible migration
+        - Requires data backfill
+        - Requires breaking migration
+        - Unknown
+    validations:
+      required: true
+  - type: textarea
+    id: migration_notes
+    attributes:
+      label: Migration notes
+      description: Describe schema, data, or rollout implications.
+      placeholder: State required up/down migrations, rollback behavior, and data risk.
+  - type: dropdown
+    id: security_impact
+    attributes:
+      label: Security impact
+      options:
+        - None
+        - Auth or authorization
+        - Secrets or credentials
+        - Network or origin policy
+        - Tool execution or sandboxing
+        - Unknown
+    validations:
+      required: true
+  - type: textarea
+    id: security_notes
+    attributes:
+      label: Security notes
+      description: Describe security assumptions, risks, or required reviews.
+      placeholder: State how this affects cookies, CSRF, tool policy, secret handling, or external calls.

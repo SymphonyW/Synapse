@@ -11,6 +11,7 @@
 | [03-协议与通信](03-协议与通信.md) | 理解 gRPC、SSE、metadata 和事件语义 |
 | [04-数据库与存储](04-数据库与存储.md) | 理解 Postgres 表、Redis 队列、内存回退和记忆文件 |
 | [05-接口验证手册](05-接口验证手册.md) | 用可复制命令验证健康检查、认证、任务、SSE、记忆接口 |
+| [roadmap](roadmap.md) | 查看当前唯一后续开发计划、能力状态和 v0.2 里程碑 |
 | [10-gateway-总览](10-gateway-总览.md) | 理解 Gateway 整体职责 |
 | [11-gateway-config模块](11-gateway-config模块.md) | 理解 Gateway 环境变量 |
 | [12-gateway-api模块](12-gateway-api模块.md) | 查 HTTP API 路由、权限、请求响应和状态码 |
@@ -48,6 +49,7 @@
 | 理解 AI Engine | 20 -> 45 -> 48 -> 46 -> 51 |
 | 理解数据与可靠性 | 04 -> 41 -> 43 -> 44 |
 | 开发前端 | 根 README -> 30 -> apps/web/README.md |
+| 查看后续开发方向 | 根 README -> roadmap |
 
 ## 维护原则
 
@@ -56,3 +58,4 @@
 3. 修改数据库结构时，同步更新 [04-数据库与存储](04-数据库与存储.md) 和 [15-gateway-store模块](15-gateway-store模块.md)。
 4. 修改 Agent 工具、审批或记忆行为时，同步更新 [20-ai-engine模块](20-ai-engine模块.md)、[45-功能-Agent工具治理与审批策略](45-功能-Agent工具治理与审批策略.md) 和 [46-功能-Agent回归评测与门禁](46-功能-Agent回归评测与门禁.md)。
 5. 当前仓库没有 OpenAPI/Swagger 文档。若后续补齐，应在本页增加入口，并在根 README 的接口文档状态中同步更新。
+6. 当前 Roadmap 只维护在 [roadmap](roadmap.md)；`60/61` 号文档是历史记录，不再作为计划依据。
